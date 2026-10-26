@@ -115,12 +115,14 @@ def auto_research(target, *, profile='rgbd', envs=1, subagents=0, agent_formal=F
 
 
 def formal_copy(target, *, profile='rgbd', claude=False, benchmark=None, demonstrations=False, experts=0,
-                expert_content='full', task=None):
+                expert_content='full', task=None, agent_policy=False):
     from harness.codex_cli import auto_research as module
     from services.mcp_contract import Contract
     case = {**BENCHMARK_CASES.get(benchmark, {}), **({'task': task} if task else {})}
     config = configuration(target.parent/'root', **case,
                            observation_profile=profile, agent_formal=True,
+                           **({'agent_policy': True, 'formal_context': 'clear', 'transfer_parts': ()}
+                              if agent_policy else {}),
                            agent_cli='claude' if claude else 'codex',
                            agent_provider='claude-login' if claude else 'openrouter',
                            expert_demonstrations=experts, expert_content=expert_content,

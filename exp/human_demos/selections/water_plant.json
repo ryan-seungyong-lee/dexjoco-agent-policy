@@ -1,0 +1,17 @@
+{
+ "task": "water_plant",
+ "clips": [
+  {
+   "h5": "EGODEX/part4/pour/57.hdf5",
+   "hands": "right"
+  },
+  {
+   "h5": "EGODEX/part4/pour/37.hdf5",
+   "hands": "right"
+  },
+  {
+   "h5": "EGODEX/part4/pour/44.hdf5",
+   "hands": "right"
+  }
+ ]
+}

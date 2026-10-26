@@ -1,7 +1,11 @@
 ---
 name: manual-robot-control
 {% if formal_episode %}
+{% if agent_policy %}
+description: Choose robot actions directly from observations to complete this episode. Use for grounded motion selection, recovery and checking every condition in TASK.md before the episode ends.
+{% else %}
 description: Choose robot actions directly from observations where your carried controller needs help. Use for grounded motion selection, recovery and checking every condition in TASK.md before the episode ends.
+{% endif %}
 {% else %}
 description: Solve {{ robot.benchmark }} tasks by directly choosing robot actions from observations during exploration. Use for solving the task by hand, recovery, and physically preparing scenes for script tests.
 {% endif %}
@@ -10,7 +14,7 @@ description: Solve {{ robot.benchmark }} tasks by directly choosing robot action
 # Manual robot control
 
 {% if formal_episode %}
-Complete the task in this episode through the robot tools and your carried code.
+Complete the task in this episode through the robot tools{% if not agent_policy %} and your carried code{% endif %}.
 Read `TASK.md` and use current observations to satisfy every condition in it.
 
 ## First look
@@ -106,7 +110,8 @@ Use these skills as needed rather than loading every reference up front:
 - [Free-space motion](../free-space-move/SKILL.md) for planned moves to pose
   targets; inspect goal-reaching feedback, not just planning success.
 {% endif %}
-{% if formal_episode %}
+{% if agent_policy %}
+{% elif formal_episode %}
 - [Experience memory](../experience-memory/SKILL.md) to apply the tips and learned
   skills you carried.
 {% else %}
@@ -115,7 +120,9 @@ Use these skills as needed rather than loading every reference up front:
 {% endif %}
 
 {{ block("images.forwarding") }}
+{% if not action_targets %}
 Treat previews as hypothetical robot motion, not observations of changed task objects.
+{% endif %}
 
 ## Motion and feedback
 
@@ -136,8 +143,10 @@ motion; keep working with what still functions.
 motion; stop and report the tool failure. Do not pause an episode to ask for action
 advice; decide from observations and your instructions.
 {% endif %}
+{% if not action_targets %}
 If optional robot preview fails, continue without it when current evidence is
 sufficient.
+{% endif %}
 If localization fails or is uncertain, take a new view; do not replace missing
 geometry with guessed coordinates.
 

@@ -76,7 +76,7 @@ def reference_mounts(config):
     if not config.expert_demonstrations:
         return []
     from services.dexjoco.demonstrations import expert_root
-    return [(expert_root(config.task), '/workspace/runtime/experts')]
+    return [(expert_root(config.task, getattr(config, 'expert_content', 'full')), '/workspace/runtime/experts')]
 
 
 def fetch_demonstration(demos_root, task, kind):

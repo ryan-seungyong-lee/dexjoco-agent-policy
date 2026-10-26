@@ -78,7 +78,7 @@ details > summary { cursor: pointer; color: var(--accent); }
       <form id="researchForm" class="grid" style="margin-top:10px">
         <label>Task <select name="task" class="taskSelect"></select></label>
         <label>Observation profile <select name="observation_profile">
-          <option value="rgbd">RGB + depth and camera geometry</option><option value="rgb-only">RGB only</option></select></label>
+          <option value="rgbd">RGB + depth and camera geometry</option><option value="rgb-depth">RGB + depth (no calibration)</option><option value="rgb-camera">RGB + camera calibration (no depth)</option><option value="rgb-only">RGB only</option></select></label>
         <label title="The simulators' GPU; the agent and its bundles have none">Simulator GPU <input name="sim_gpu" required></label>
         <label>Demonstration <select name="demonstration_context" class="demoSelect"></select></label>
         <label>Task rules <select name="task_rules"><option value="public">Public wiki rubric</option><option value="code-summary">Public rubric + rules from the task code</option></select></label>

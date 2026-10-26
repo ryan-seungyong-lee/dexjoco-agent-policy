@@ -173,7 +173,8 @@ def redeploy(config, claude=None):
                 'subagents': subagent_cap(config)}
     expose_published(root)
     relocate(deployed['claude_home'], deployed['workspace'])
-    deployed['resume_session'] = latest_claude_session(deployed['claude_home'])
+    # Agent as policy never runs an exploring agent, so there is no conversation to resume.
+    deployed['resume_session'] = None if getattr(config, 'agent_policy', False) else latest_claude_session(deployed['claude_home'])
     refresh_reviews(config, deployed['workspace'])
     return deployed
 
@@ -335,7 +336,8 @@ def until_usage_resets(run, *, deployed, prompt, interactive, on_wait=None, slee
         if on_wait:
             on_wait(None, waited)
         deployed['resume_session'] = latest_claude_session(deployed['claude_home'])
-        prompt = USAGE_PROMPT
+        from harness.codex_cli.auto_research import unattended
+        prompt = unattended(USAGE_PROMPT, deployed.get('agent_formal', False))
 
 
 def launch(config, deployed, *, gemini_key_file=None, prompt, interactive=False, capture=False, on_wait=None,

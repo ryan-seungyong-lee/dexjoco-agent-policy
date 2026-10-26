@@ -9,6 +9,12 @@ def describe(contract: Contract, options=frozenset()) -> str:
     localization = "[object-localization](.agents/skills/object-localization/SKILL.md)"
     if contract.observation.geometry:
         geometry = f"RGB images, depth and camera calibration are supplied; get metric positions with {localization}."
+    elif contract.observation.depth:
+        geometry = (f"RGB images and depth images are supplied, but no camera calibration (intrinsics or poses); "
+                    f"locate objects with {localization}.")
+    elif contract.observation.camera_params:
+        geometry = (f"RGB images and camera calibration (intrinsics and world poses) are supplied, but no depth; "
+                    f"locate objects with {localization}.")
     else:
         geometry = f"Only RGB images and measured robot state are supplied; locate objects with {localization}."
     environments = ''
@@ -27,7 +33,8 @@ def describe(contract: Contract, options=frozenset()) -> str:
                + ". The live tool schemas give arguments and limits.")
     robot_status = contract.bench.status_tool
     if 'status' in tools and robot_status in tools:
-        reports = ("this episode's limits and what you carried" if 'formal-episode' in options else
+        reports = ("this episode's limits" if 'agent-policy' in options else
+                   "this episode's limits and what you carried" if 'formal-episode' in options else
                    "budgets, bundles and episode state" if contract.bundle_tools else
                    "budgets, episode state and the carried folders")
         listing += f" `status` reports {reports}; `{robot_status}` reports the live robot and episode."

@@ -1,0 +1,226 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Dex Agent Dashboard</title>
+<style>
+:root {
+  color-scheme: light;
+  --surface-0: #f4f3ef; --surface-1: #fcfcfb; --surface-2: #efeee9; --line: #dddcd5;
+  --text-primary: #0b0b0b; --text-secondary: #52514e; --text-muted: #7a7974;
+  --seq-0: #f1f0ec; --seq-1: #cde2fb; --seq-2: #9ec5f4; --seq-3: #6da7ec; --seq-4: #3987e5; --seq-5: #256abf; --seq-6: #184f95;
+  --k-thinking: #6250d6; --k-text: #2a78d6; --k-tool: #eb6834; --k-result: #1baf7a; --k-program: #7a7974; --k-demo: #e87ba4; --k-prompt: #008300;
+  --good: #1a7f37; --bad: #c62828; --warn: #b26a00;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --surface-0: #121211; --surface-1: #1a1a19; --surface-2: #232321; --line: #353532;
+    --text-primary: #f0efec; --text-secondary: #c3c2b7; --text-muted: #8f8e88;
+    --seq-0: #232321; --seq-1: #104281; --seq-2: #184f95; --seq-3: #1c5cab; --seq-4: #256abf; --seq-5: #3987e5; --seq-6: #6da7ec;
+    --k-thinking: #9085e9; --k-text: #3987e5; --k-tool: #d95926; --k-result: #199e70; --k-program: #8f8e88; --k-demo: #d55181; --k-prompt: #2ea043;
+    --good: #3fb950; --bad: #f05d5d; --warn: #d29922;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --surface-0: #121211; --surface-1: #1a1a19; --surface-2: #232321; --line: #353532;
+  --text-primary: #f0efec; --text-secondary: #c3c2b7; --text-muted: #8f8e88;
+  --seq-0: #232321; --seq-1: #104281; --seq-2: #184f95; --seq-3: #1c5cab; --seq-4: #256abf; --seq-5: #3987e5; --seq-6: #6da7ec;
+  --k-thinking: #9085e9; --k-text: #3987e5; --k-tool: #d95926; --k-result: #199e70; --k-program: #8f8e88; --k-demo: #d55181; --k-prompt: #2ea043;
+  --good: #3fb950; --bad: #f05d5d; --warn: #d29922;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--surface-0); color: var(--text-primary);
+  font: 14px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", "Apple SD Gothic Neo", sans-serif; }
+header { padding: 12px 16px; border-bottom: 1px solid var(--line); background: var(--surface-1); display: flex; gap: 12px; align-items: baseline; flex-wrap: wrap; position: sticky; top: 0; z-index: 2; }
+header h1 { font-size: 16px; margin: 0; }
+header .sub { color: var(--text-secondary); font-size: 13px; }
+main { padding: 16px; max-width: 1400px; margin: 0 auto; }
+.card { background: var(--surface-1); border: 1px solid var(--line); border-radius: 8px; padding: 16px; margin-bottom: 16px; }
+h2 { font-size: 15px; margin: 0 0 4px; }
+h3 { font-size: 13px; margin: 0 0 8px; color: var(--text-secondary); font-weight: 600; }
+p.note { color: var(--text-secondary); font-size: 12px; margin: 0 0 12px; }
+table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
+th, td { padding: 6px 8px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: middle; }
+th { color: var(--text-secondary); font-weight: 600; font-size: 12px; }
+td.num, th.num { text-align: right; }
+.scroll { overflow-x: auto; }
+.cell { min-width: 76px; text-align: center; border-radius: 4px; cursor: pointer; padding: 6px 4px; border: 2px solid var(--surface-1); }
+.cell small { display: block; opacity: .85; font-size: 11px; }
+.legend { display: flex; gap: 4px; align-items: center; font-size: 12px; color: var(--text-secondary); margin-top: 8px; flex-wrap: wrap; }
+.legend .sw { width: 24px; height: 10px; border-radius: 2px; display: inline-block; }
+a { color: var(--k-text); }
+button { font: inherit; background: var(--surface-2); color: var(--text-primary); border: 1px solid var(--line); border-radius: 6px; padding: 4px 10px; cursor: pointer; }
+.chip { display: inline-block; font-size: 11px; font-weight: 600; padding: 1px 6px; border-radius: 4px; color: #fff; white-space: nowrap; }
+.ok { color: var(--good); font-weight: 600; } .fail { color: var(--bad); font-weight: 600; } .warn { color: var(--warn); font-weight: 600; }
+.kv { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 8px; }
+.kv div { background: var(--surface-2); border-radius: 6px; padding: 8px 10px; }
+.kv b { display: block; font-size: 18px; font-variant-numeric: tabular-nums; }
+.kv span { color: var(--text-secondary); font-size: 12px; }
+.eps { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 10px; }
+.ep { background: var(--surface-2); border-radius: 8px; padding: 10px 12px; cursor: pointer; border: 2px solid transparent; }
+.ep.sel { border-color: var(--k-text); }
+.ep .row { display: flex; justify-content: space-between; gap: 8px; font-size: 12px; color: var(--text-secondary); font-variant-numeric: tabular-nums; }
+.ep .head { display: flex; justify-content: space-between; margin-bottom: 4px; font-weight: 600; }
+.ep .final { font-size: 12px; color: var(--text-secondary); margin-top: 6px; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.bar { height: 6px; background: var(--seq-0); border-radius: 3px; overflow: hidden; margin: 6px 0; }
+.bar i { display: block; height: 100%; background: var(--seq-4); }
+.filters { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; margin-bottom: 8px; font-size: 13px; }
+.filters label { display: flex; gap: 4px; align-items: center; }
+.ev { display: grid; grid-template-columns: 64px 120px minmax(0, 1fr); gap: 8px; padding: 6px 0; border-bottom: 1px solid var(--line); }
+.ev .t { color: var(--text-muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+.ev pre { margin: 0; white-space: pre-wrap; word-break: break-word; font: 12px/1.4 ui-monospace, Menlo, monospace; color: var(--text-secondary); max-height: 220px; overflow: auto; }
+.ev .imgs { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 4px; }
+.ev .imgs img { height: 120px; border-radius: 4px; border: 1px solid var(--line); cursor: zoom-in; }
+#zoom { position: fixed; inset: 0; background: rgba(0,0,0,.85); display: none; align-items: center; justify-content: center; z-index: 9; }
+#zoom img { max-width: 94vw; max-height: 94vh; }
+.muted { color: var(--text-muted); }
+@media (max-width: 640px) { .ev { grid-template-columns: 1fr; } main { padding: 16px; } }
+</style>
+</head>
+<body>
+<header><h1>Dex Agent Dashboard</h1><span class="sub" id="sub"></span><span style="flex:1"></span><button id="theme" type="button">테마</button></header>
+<main id="app"></main>
+<div id="zoom"><img alt=""></div>
+<script>
+const DATA = './data';
+const KIND = {thinking: ['생각', '--k-thinking'], text: ['응답', '--k-text'], tool_use: ['도구 호출', '--k-tool'],
+  tool_result: ['도구 결과(입력)', '--k-result'], program: ['코드가 한 호출', '--k-program'], demo: ['데모 접근', '--k-demo'],
+  user: ['프롬프트', '--k-prompt'], compaction: ['컨텍스트 압축', '--k-program'], mcp_error: ['MCP 오류', '--bad']};
+const MODE = {agp: 'Agent as policy', cap: 'Code as policy'};
+// What each phase of exp/arms.yaml ran, newest protocol first; phases not listed go last.
+const PHASES = [
+  ['sonnet_screen', 'Sonnet 5.5, task 찾기 1단계: rgbd vs rgbd + 로봇 데모(요약 keyposes.json)'],
+  ['agp_targets_pilot', 'Haiku 5.5, 순수 AgP (연습·이월 없음) + 목표 단위 이동 도구'],
+  ['model_opus', '현재 프로토콜, 모델만 Opus 5.5'],
+  ['model_sonnet', '현재 프로토콜, 모델만 Sonnet 5.5'],
+  ['agp_pilot', '순수 AgP, 20 ms 행을 직접 보내는 인터페이스 (이전)'],
+  ['pilot2', '초기 AgP: 연습 1 에피소드 + 대화·메모 이월 (RAX live-copy)'],
+  ['pilot', '초기 AgP: 연습 1 에피소드 + 대화·메모 이월, 쉬운 task 찾기'],
+  ['agp', '초기 AgP (water_plant, 평가 10개), 중단'],
+  ['smoke', 'CaP 점검 실행']];
+const phaseNote = p => (PHASES.find(([k]) => k === p) || [])[1] || '';
+const phaseRank = p => { const i = PHASES.findIndex(([k]) => k === p); return i < 0 ? 99 : i; };
+const $ = (s, r = document) => r.querySelector(s);
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;'})[c]);
+const pct = v => v == null ? '–' : Math.round(v * 100) + '%';
+const tok = n => n == null ? '–' : n >= 1e6 ? (n / 1e6).toFixed(1) + 'M' : n >= 1e3 ? Math.round(n / 1e3) + 'k' : String(n);
+const seqVar = v => v == null ? '--seq-0' : `--seq-${Math.min(6, 1 + Math.floor(v * 6))}`;
+const rel = s => { if (s == null) return ''; const m = Math.floor(s / 60), x = Math.floor(s % 60); return `${m}:${String(x).padStart(2, '0')}`; };
+const model = m => String(m || '').replace('claude-', '').replace(/-(\d)-(\d)$/, ' $1.$2');
+$('#theme').onclick = () => {
+  const dark = matchMedia('(prefers-color-scheme: dark)').matches;
+  const cur = document.documentElement.dataset.theme || (dark ? 'dark' : 'light');
+  document.documentElement.dataset.theme = cur === 'dark' ? 'light' : 'dark';
+};
+$('#zoom').onclick = () => $('#zoom').style.display = 'none';
+const zoom = src => { $('#zoom img').src = src; $('#zoom').style.display = 'flex'; };
+
+async function overview() {
+  const index = await (await fetch(`${DATA}/index.json`)).json();
+  $('#sub').textContent = `${index.length}개 arm`;
+  const phases = [...new Set(index.map(r => r.phase))].sort((a, b) => phaseRank(a) - phaseRank(b));
+  let html = '';
+  for (const phase of phases) {
+    const rows = index.filter(r => r.phase === phase);
+    const mode = rows[0].mode;
+    const arm = r => `${r.profile} · ${r.expert === 'none' ? '데모 없음' : r.expert}`;
+    const arms = [...new Set(rows.map(arm))].sort(), tasks = [...new Set(rows.map(r => r.task))].sort();
+    html += `<div class="card"><h2>${esc(phase)}</h2><p class="note">${esc(phaseNote(phase))}${phaseNote(phase) ? ' · ' : ''}${MODE[mode] || mode} · ${esc([...new Set(rows.map(r => model(r.model)))].join(', '))} · 칸: 성공 / 평가한 에피소드 (사용 한도에 걸린 에피소드는 제외)</p><div class="scroll"><table><tr><th>입력 · 데모</th>${tasks.map(t => `<th>${esc(t)}</th>`).join('')}</tr>`;
+    for (const a of arms) {
+      html += `<tr><td>${esc(a)}</td>`;
+      for (const t of tasks) {
+        const r = rows.find(x => x.task === t && arm(x) === a);
+        if (!r) { html += '<td></td>'; continue; }
+        const v = r.success_rate, light = v != null && v > .55;
+        html += `<td><div class="cell" data-arm="${esc(r.arm_id)}" style="background:var(${seqVar(v)});color:${light ? '#fff' : 'var(--text-primary)'}">${r.evaluated ? `${r.successes}/${r.evaluated}` : '결과 없음'}<small>${pct(v)}${r.usage_limited ? ` · 한도 ${r.usage_limited}` : ''}</small></div></td>`;
+      }
+      html += '</tr>';
+    }
+    html += `</table></div></div>`;
+  }
+  html += `<div class="card"><h2>모든 arm</h2><p class="note">토큰은 평가한 에피소드의 합(입력은 캐시 포함). 에피소드당 = 합 ÷ 평가 수.</p><div class="scroll"><table><tr><th>arm</th><th>모드</th><th>모델</th><th class="num">성공</th><th class="num">에피소드당 시간</th><th class="num">에피소드당 출력 토큰</th><th class="num">에피소드당 입력 토큰</th><th class="num">총 토큰</th></tr>`;
+  for (const r of index) {
+    const n = r.evaluated || 0, t = r.tokens || {};
+    html += `<tr><td><a href="#${encodeURIComponent(r.arm_id)}">${esc(r.arm_id)}</a></td><td>${r.mode}</td><td>${esc(model(r.model))}</td><td class="num">${n ? `${r.successes}/${n}` : '–'}</td><td class="num">${r.minutes_per_episode ? r.minutes_per_episode + '분' : '–'}</td><td class="num">${n && t.output ? tok(t.output / n) : '–'}</td><td class="num">${n && t.input ? tok(t.input / n) : '–'}</td><td class="num">${tok(t.total)}</td></tr>`;
+  }
+  html += '</table></div></div>';
+  $('#app').innerHTML = html;
+  document.querySelectorAll('.cell').forEach(c => c.onclick = () => location.hash = encodeURIComponent(c.dataset.arm));
+}
+
+async function armView(arm) {
+  const base = `${DATA}/${arm}`;
+  const s = await (await fetch(`${base}/session.json`)).json();
+  const m = s.manifest, t = s.tokens || {};
+  $('#sub').innerHTML = `<a href="#">← 전체</a> · ${esc(arm)}`;
+  let html = `<div class="card"><h2>${esc(m.task)} · 입력 ${esc(m.profile)} · 데모 ${esc(m.expert)}</h2><p class="note">${MODE[s.mode] || s.mode} · ${esc(m.agent || 'claude')} ${esc(model(m.model))} · effort ${esc(m.effort)} · git ${esc((m.git_sha || '').slice(0, 8))} · ${esc(m.host || '')}</p><div class="kv">
+    <div><b>${s.evaluated ? `${s.successes}/${s.evaluated}` : '–'}</b><span>성공 / 평가 에피소드</span></div>
+    <div><b>${pct(s.success_rate)}</b><span>성공률</span></div>
+    ${s.minutes_per_episode ? `<div><b>${s.minutes_per_episode}분</b><span>에피소드당 시간</span></div>` : ''}
+    <div><b>${tok(t.output)}</b><span>출력 토큰 (합)</span></div>
+    <div><b>${tok(t.input)}</b><span>입력 토큰 (캐시 읽기 ${tok(t.cache_read)})</span></div>
+    ${s.usage_limited ? `<div><b class="warn">${s.usage_limited}</b><span>사용 한도로 제외된 에피소드</span></div>` : ''}</div></div>`;
+  let units = [];
+  if (s.mode === 'cap') {
+    const ms = s.milestones || {}, x = s.exploration;
+    const mile = (v, label) => `<div><b>${v ? v.minutes + '분' : '–'}</b><span>${label}${v && v.output_tokens ? ` · 출력 ${tok(v.output_tokens)}` : ''}</span></div>`;
+    html += `<div class="card"><h2>코드 작성 과정</h2><div class="kv">${mile(ms.first_qualified_rehearsal, '첫 리허설 통과까지')}${mile(ms.submission, '제출까지')}<div><b>${x.episodes_used}</b><span>쓴 탐색 에피소드</span></div><div><b>${x.model_requests ?? '–'}</b><span>모델 요청</span></div></div></div>`;
+    units = [x];
+    if (s.formal?.length) html += `<div class="card"><h2>제출한 프로그램의 공식 평가</h2><p class="note">${s.formal.filter(e => e.success).length} / ${s.formal.length} 성공</p></div>`;
+  } else {
+    units = s.episodes;
+  }
+  html += `<div class="card"><h2>${s.mode === 'cap' ? '탐색 대화' : '평가 에피소드'}</h2><p class="note">카드를 누르면 아래에 그 에피소드의 타임라인이 열립니다.</p><div class="eps">${units.map((e, i) => {
+    const ex = e.exposure || {}, tk = e.tokens || {};
+    const status = e.success == null ? '' : e.usage_limited ? '<span class="warn">사용 한도</span>' : e.success ? '<span class="ok">성공</span>' : '<span class="fail">실패</span>';
+    return `<div class="ep" data-i="${i}"><div class="head"><span>${esc(e.label)}</span>${status}</div>
+      ${e.steps != null ? `<div class="row"><span>스텝 ${e.steps}</span><span>${e.minutes ?? '–'}분</span></div>` : ''}
+      <div class="row"><span>출력 ${tok(tk.output)} · 입력 ${tok(tk.input)}</span><span>요청 ${e.model_requests ?? '–'}</span></div>
+      <div class="row"><span>RGB ${ex.rgb_images ?? 0} · Depth ${ex.depth_images ?? 0} · 카메라 ${ex.camera_params ?? 0}</span><span>데모 ${ex.demo_reads ?? 0}</span></div>
+      <div class="row"><span>도구 호출 ${ex.agent_tool_calls ?? 0}</span><span>코드가 한 호출 ${ex.program_calls ?? 0}</span></div>
+      ${e.final_text ? `<div class="final">${esc(e.final_text)}</div>` : ''}</div>`;
+  }).join('')}</div></div><div class="card" id="tlcard" style="display:none"><h2 id="tltitle"></h2><div class="filters">
+    ${['thinking', 'text', 'tool_use', 'tool_result', 'program', 'user'].map(k => `<label><input type="checkbox" data-k="${k}" ${k === 'program' ? '' : 'checked'}> <span class="chip" style="background:var(${KIND[k][1]})">${KIND[k][0]}</span></label>`).join('')}
+    <label><input type="checkbox" id="onlyimg"> 이미지 있는 것만</label><label><input type="checkbox" id="onlydemo"> 데모 접근만</label></div><div id="tl"></div></div>`;
+  if (s.controller_py) html += `<div class="card"><h2>제출한 controller.py</h2><div class="ev" style="grid-template-columns:1fr"><pre style="max-height:600px">${esc(s.controller_py)}</pre></div></div>`;
+  $('#app').innerHTML = html;
+  let events = [];
+  const draw = () => {
+    const on = new Set([...document.querySelectorAll('.filters input[data-k]')].filter(i => i.checked).map(i => i.dataset.k));
+    const onlyImg = $('#onlyimg').checked, onlyDemo = $('#onlydemo').checked;
+    let out = '';
+    for (const e of events) {
+      const kind = e.src === 'mcp' ? (e.kind === 'mcp_error' ? 'mcp_error' : e.caller === 'program' ? 'program' : null) : e.kind;
+      if (!kind) continue;  // the agent's own robot calls already show as tool_use / tool_result
+      if (!on.has(kind) && kind !== 'mcp_error' && kind !== 'compaction') continue;
+      if (onlyImg && !(e.images || []).length) continue;
+      if (onlyDemo && !e.demo_paths) continue;
+      const [label, color] = KIND[e.demo_paths ? 'demo' : kind] || [kind, '--k-program'];
+      const inp = e.inputs && Object.keys(e.inputs).length ? `입력: RGB ${e.inputs.rgb ?? 0} · Depth ${e.inputs.depth ?? 0} · 카메라 ${e.inputs.camera_params ? '있음' : '없음'}` : '';
+      const motion = e.motion ? `이동: ${e.motion.reached === false ? '<span class="fail">미도달</span>' : e.motion.reached ? '<span class="ok">도달</span>' : ''}${e.motion.stalled ? ' <span class="warn">막힘</span>' : ''} · ${e.motion.steps_used} 스텝${e.motion.position_error_m != null ? ` · 오차 ${(e.motion.position_error_m * 100).toFixed(1)}cm` : ''}${(e.motion.blocked_joints || []).length ? ` · 막힌 관절 ${e.motion.blocked_joints.join(',')}` : ''}` : '';
+      const body = esc(e.text ?? e.args ?? e.error ?? '');
+      out += `<div class="ev"><span class="t">${rel(e.rel)}</span><span><span class="chip" style="background:var(${color})">${label}</span><br><span class="muted">${esc(e.tool || '')}${e.step_id != null ? ' · step ' + e.step_id : ''}</span></span><div>${inp ? `<div class="muted">${inp}</div>` : ''}${motion ? `<div class="muted">${motion}</div>` : ''}${e.demo_paths ? `<div class="muted">데모: ${esc(e.demo_paths.join(', '))}</div>` : ''}<pre>${body}</pre>${(e.images || []).length ? `<div class="imgs">${e.images.map(p => `<img loading="lazy" src="${base}/${p}" alt="이미지">`).join('')}</div>` : ''}</div></div>`;
+    }
+    $('#tl').innerHTML = out || '<p class="muted">표시할 이벤트가 없습니다.</p>';
+    document.querySelectorAll('#tl img').forEach(i => i.onclick = () => zoom(i.src));
+  };
+  document.querySelectorAll('.filters input').forEach(i => i.onchange = draw);
+  document.querySelectorAll('.ep').forEach(card => card.onclick = async () => {
+    document.querySelectorAll('.ep').forEach(c => c.classList.toggle('sel', c === card));
+    const unit = units[+card.dataset.i];
+    const text = await (await fetch(`${base}/${unit.timeline}`)).text();
+    events = text.split('\n').filter(Boolean).map(l => JSON.parse(l));
+    $('#tlcard').style.display = '';
+    $('#tltitle').textContent = `${unit.label} 타임라인 (${events.length} 이벤트)`;
+    draw();
+    $('#tlcard').scrollIntoView({behavior: 'smooth'});
+  });
+}
+function route() { const arm = decodeURIComponent(location.hash.slice(1)); (arm ? armView(arm) : overview()).catch(e => $('#app').innerHTML = `<div class="card">데이터를 읽지 못했습니다: ${esc(e)}</div>`); }
+addEventListener('hashchange', route); route();
+</script>
+</body>
+</html>

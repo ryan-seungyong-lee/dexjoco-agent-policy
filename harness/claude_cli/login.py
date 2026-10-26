@@ -21,9 +21,9 @@ PROVIDERS = {
     'openrouter': {'base_url': 'https://openrouter.ai/api', 'model': 'anthropic/claude-opus-5.5',
                    'auditor': 'anthropic/claude-sonnet-5.5', 'fast': 'anthropic/claude-haiku-4.5'},
     'anthropic': {'base_url': 'https://api.anthropic.com', 'model': 'claude-opus-5-5',
-                  'auditor': 'claude-haiku-4-5-20251001', 'fast': 'claude-haiku-4-5-20251001'},
+                  'auditor': 'claude-haiku-5-5', 'fast': 'claude-haiku-5-5'},
     'claude-login': {'base_url': 'https://api.anthropic.com', 'model': 'claude-opus-5-5',
-                     'auditor': 'claude-haiku-4-5-20251001', 'fast': 'claude-haiku-4-5-20251001'},
+                     'auditor': 'claude-haiku-5-5', 'fast': 'claude-haiku-5-5'},
     'custom': {'base_url': None, 'model': 'deepseek-flash',
                'auditor': 'deepseek-flash', 'fast': 'deepseek-flash'},
 }
@@ -93,10 +93,16 @@ class Credential:
 
     def environment(self, *, model=None):
         """The variables that sign Claude Code in natively."""
-        if self.provider == 'claude-login':
-            return {'CLAUDE_CODE_OAUTH_TOKEN': self.secret()}
-        if self.provider == 'anthropic':
-            return {'ANTHROPIC_API_KEY': self.secret()}
+        if self.provider in ('claude-login', 'anthropic'):
+            environment = ({'CLAUDE_CODE_OAUTH_TOKEN': self.secret()} if self.provider == 'claude-login'
+                           else {'ANTHROPIC_API_KEY': self.secret()})
+            if model:
+                # One model for every request (side requests, aliases and subagents too), so a
+                # session's results and costs belong to the chosen model alone.
+                environment.update({name: model for name in (
+                    'ANTHROPIC_DEFAULT_OPUS_MODEL', 'ANTHROPIC_DEFAULT_SONNET_MODEL',
+                    'ANTHROPIC_DEFAULT_HAIKU_MODEL', 'ANTHROPIC_SMALL_FAST_MODEL', 'CLAUDE_CODE_SUBAGENT_MODEL')})
+            return environment
         provider = PROVIDERS[self.provider]
         environment = {'ANTHROPIC_BASE_URL': self.base_url.rstrip('/'), 'ANTHROPIC_AUTH_TOKEN': self.secret(),
                 'ANTHROPIC_API_KEY': '',

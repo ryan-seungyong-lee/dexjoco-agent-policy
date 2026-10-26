@@ -46,6 +46,9 @@ class DexjocoBackend:
         self.preview = PreviewProcess(output_root=root / "preview", sim_gpu=config.sim_gpu, task=config.task)
         self._evaluation = None
         self._raw = None  # Last raw observation (host memory only), for pixel geometry.
+        # The last row sent to the simulator (episode id, row): target-level motion keeps the targets
+        # it does not change, such as a closed hand's, instead of re-reading the measured state.
+        self._command = None
         self._environment_spec = None
 
     # ------------------------------------------------------------------ tools
@@ -58,6 +61,12 @@ class DexjocoBackend:
 
     def _geometry(self):
         return self.contract.observation.geometry
+
+    def _render_depth(self):
+        # Calibration is computed with the depth frames, so rgb-camera renders depth too;
+        # the profile's clean() keeps it from the agent.
+        observation = self.contract.observation
+        return observation.depth or observation.camera_params
 
     def call(self, name, arguments):
         # Each motion sends one mutating RPC, then assembles the packet from its frames.
@@ -85,17 +94,169 @@ class DexjocoBackend:
             if not self._geometry():
                 raise PermissionError("Pixel-to-position is unavailable with RGB-only observations")
             return self._pixel_to_position(arguments), []
+        summary = None
         try:
             if name == T.STEP:
-                result = sim.request("chunk_step", actions=np.asarray(arguments["actions"], dtype=np.float64))
+                result = self._run_rows(arguments["actions"])
+            elif name == T.HOLD and self.contract.action_interface == "targets" and self._command is not None \
+                    and self._command[0] == sim.episode_id:
+                # Target-level motion: holding keeps the commanded targets (a closed hand stays closed),
+                # where the official stay() would re-target the measured pose.
+                result = self._run_rows(np.repeat(self._base_row()[None], int(arguments["steps"]), axis=0))
             elif name == T.HOLD:
-                result = sim.request("hold", steps=int(arguments["steps"]))
+                result = self._remember(sim.request("hold", steps=int(arguments["steps"])))
+            elif name == T.MOVE_EE:
+                result, summary = self._move_ee(arguments)
+            elif name == T.HAND:
+                result, summary = self._hand(arguments)
             else:
                 raise ValueError(f"Unknown DexJoCo tool: {name}")
         finally:
             if (sim.episode_id, sim.step_id) != before:
                 self._evaluation = None
-        return self._motion_packet(result)
+        packet, content = self._motion_packet(result)
+        if summary is not None:
+            packet["motion"] = _jsonable(summary)
+        return packet, content
+
+    # ------------------------------------------------- target-level motion
+    def _remember(self, result):
+        steps = result.get("steps") or []
+        if steps:
+            self._command = (self.sim.episode_id, np.asarray(steps[-1]["executed_action"], dtype=np.float64))
+        return result
+
+    def _run_rows(self, rows):
+        """Official rows in chunks of at most MAX_ACTION_ROWS; one merged result (stops at the episode end)."""
+        rows = np.asarray(rows, dtype=np.float64)
+        merged = None
+        for start in range(0, len(rows), T.MAX_ACTION_ROWS):
+            result = self._remember(self.sim.request("chunk_step", actions=rows[start:start + T.MAX_ACTION_ROWS]))
+            if merged is None:
+                merged = result
+            else:
+                merged = {**result, "frames": merged["frames"] + result["frames"],
+                          "steps": merged["steps"] + result["steps"],
+                          "frame_count": merged["frame_count"] + result["frame_count"]}
+            if result.get("terminated") or result.get("truncated"):
+                break
+        return merged
+
+    def _base_row(self):
+        """The row that keeps every target as last commanded (the official hold row before any command)."""
+        if self._command is not None and self._command[0] == self.sim.episode_id:
+            return self._command[1].copy()
+        return np.asarray(RM.rotation_math({"operation": "row_from_state", "state": self._measured_state()})["row"],
+                          dtype=np.float64)
+
+    def _arm_state(self, state, arm):
+        from scipy.spatial.transform import Rotation
+
+        _, _, position, quaternion, hand = T.arm_slices(self.info["dual_arm"], arm)
+        state = np.asarray(state, dtype=np.float64)
+        return state[position], Rotation.from_quat(state[quaternion], scalar_first=True), state[hand]
+
+    def _settle(self, result, target_row, arm, position, rotation, tolerance, budget):
+        """Hold the target in short chunks until the measured flange is within tolerance, the budget runs
+        out, or it stalls short (at rest without getting closer). Each chunk's command leads the target by
+        LEAD_GAIN times the measured error, bounded by MAX_LEAD_M."""
+        flange = T.arm_slices(self.info["dual_arm"], arm)[0]
+        used, previous, lead = 0, None, np.zeros(3)
+        while True:
+            measured, measured_rotation, _ = self._arm_state(result["frames"][-1]["state"], arm)
+            error = float(np.linalg.norm(measured - position))
+            angle = float((rotation * measured_rotation.inv()).magnitude())
+            reached = error <= tolerance and angle <= T.ROTATION_TOLERANCE_RAD
+            stalled = previous is not None and float(np.linalg.norm(measured - previous[0])) < T.REST_M \
+                and previous[1] - error < T.REST_M
+            if reached or stalled or used >= budget or result.get("terminated") or result.get("truncated"):
+                return result, used, reached, error, angle, measured, measured_rotation, lead, stalled
+            previous = (measured, error)
+            lead = T.LEAD_GAIN * (position - measured)
+            norm = float(np.linalg.norm(lead))
+            if norm > T.MAX_LEAD_M:
+                lead *= T.MAX_LEAD_M / norm
+            row = target_row.copy()
+            row[flange.start:flange.start + 3] = position + lead
+            chunk = min(T.SETTLE_CHUNK, budget - used)
+            more = self._run_rows(np.repeat(row[None], chunk, axis=0))
+            result = {**more, "frames": result["frames"] + more["frames"], "steps": result["steps"] + more["steps"],
+                      "frame_count": result["frame_count"] + more["frame_count"]}
+            used += chunk
+
+    def _move_ee(self, arguments):
+        from scipy.spatial.transform import Rotation, Slerp
+
+        arm = arguments.get("arm", "right")
+        flange, hand, _, _, _ = T.arm_slices(self.info["dual_arm"], arm)
+        start_position, start_rotation, _ = self._arm_state(self._measured_state(), arm)
+        if "position_m" in arguments:
+            position = np.asarray(arguments["position_m"], dtype=np.float64)
+        else:
+            position = start_position + np.asarray(arguments.get("delta_m", [0.0, 0.0, 0.0]), dtype=np.float64)
+        rotation = RM._from(arguments["rotation"]) if "rotation" in arguments else start_rotation
+        linear, angular = T.SPEEDS[arguments.get("speed", "transit")]
+        distance = float(np.linalg.norm(position - start_position))
+        angle = float((rotation * start_rotation.inv()).magnitude())
+        count = max(1, int(np.ceil(max(distance / linear, angle / angular))))
+        reject_unless(count <= T.MAX_MOTION_STEPS,
+                      f"this move needs {count} steps at {arguments.get('speed', 'transit')} speed (limit "
+                      f"{T.MAX_MOTION_STEPS}); split it or use transit")
+        base = self._base_row()
+        hand_start = base[hand].copy()
+        hand_goal = np.asarray(arguments["hand_joints_rad"], dtype=np.float64) if "hand_joints_rad" in arguments else hand_start
+        slerp = Slerp([0.0, 1.0], Rotation.concatenate([start_rotation, rotation]))
+        rows, near = [], base[flange][3:6]
+        for k in range(1, count + 1):
+            fraction = k / count
+            row = base.copy()
+            rotvec = RM._nearest(slerp(fraction).as_rotvec(), near)
+            near = rotvec
+            row[flange] = [*(start_position + fraction * (position - start_position)), *rotvec]
+            row[hand] = hand_start + fraction * (hand_goal - hand_start)
+            rows.append(row)
+        result = self._run_rows(rows)
+        result, settle, reached, error, angle_error, measured, measured_rotation, lead, stalled = self._settle(
+            result, rows[-1], arm, position, rotation, float(arguments.get("position_tolerance_m", 0.01)),
+            int(arguments.get("max_settle_steps", 30)))
+        summary = {"arm": arm, "reached": reached, "interpolated_steps": min(count, len(result["steps"]) - settle),
+                   "settle_steps": settle,
+                   "steps_used": len(result["steps"]), "speed": arguments.get("speed", "transit"),
+                   "target": {"position_m": position.tolist(), "quaternion_wxyz": rotation.as_quat(scalar_first=True).tolist()},
+                   "measured": {"position_m": measured.tolist(),
+                                "quaternion_wxyz": measured_rotation.as_quat(scalar_first=True).tolist()},
+                   "position_error_m": round(error, 4), "rotation_error_rad": round(angle_error, 4),
+                   # How far the last settle command led the target (LEAD_GAIN x the error then).
+                   "settle_lead_m": np.round(lead, 4).tolist(),
+                   # The flange stopped short and stayed there: something is in the way or out of reach.
+                   "stalled": stalled,
+                   "episode_ended": bool(result.get("terminated") or result.get("truncated"))}
+        return result, summary
+
+    def _hand(self, arguments):
+        arm = arguments.get("arm", "right")
+        _, hand, _, _, _ = T.arm_slices(self.info["dual_arm"], arm)
+        base = self._base_row()
+        start, goal = base[hand].copy(), np.asarray(arguments["joints_rad"], dtype=np.float64)
+        count = int(arguments.get("steps", 15))
+        rows = []
+        for k in range(1, count + 1):
+            row = base.copy()
+            row[hand] = start + (k / count) * (goal - start)
+            rows.append(row)
+        settle = int(arguments.get("settle_steps", 5))
+        if settle:
+            rows.extend([rows[-1]] * settle)
+        result = self._run_rows(rows)
+        _, _, measured = self._arm_state(result["frames"][-1]["state"], arm)
+        error = goal - measured
+        names = T.HAND_JOINTS if arm == "right" or not self.info["dual_arm"] else T.LEFT_HAND_JOINTS
+        summary = {"arm": arm, "steps_used": len(result["steps"]), "target_joints_rad": goal.tolist(),
+                   "measured_joints_rad": measured.tolist(), "tracking_error_rad": np.round(error, 3).tolist(),
+                   "blocked_joints": [n for n, e in zip(names, error) if abs(e) > T.BLOCKED_JOINT_RAD],
+                   "joint_order": list(names),
+                   "episode_ended": bool(result.get("terminated") or result.get("truncated"))}
+        return result, summary
 
     # ---------------------------------------------------------------- packets
     def _cameras(self):
@@ -121,7 +282,7 @@ class DexjocoBackend:
                 content.append({"type": "image", "data": _png_data(np.asarray(observation[camera], dtype=np.uint8)),
                                 "mimeType": "image/png"})
                 attachments.append({"kind": "rgb", "camera": camera, "content_index": len(content)})
-        if self._geometry():
+        if self.contract.observation.depth:
             for camera in cameras:
                 key = f"{camera}_depth_m"
                 if key in observation:
@@ -136,8 +297,11 @@ class DexjocoBackend:
         fields = {"state": observation.get("state"),
                   "images": [a["camera"] for a in attachments if a["kind"] == "rgb"],
                   "attachments": attachments}
-        if self._geometry() and depth:
-            fields.update(depth=depth, camera_intrinsics=observation.get("camera_intrinsics"),
+        profile = self.contract.observation
+        if profile.depth and depth:
+            fields.update(depth=depth)
+        if profile.camera_params and observation.get("camera_intrinsics") is not None:
+            fields.update(camera_intrinsics=observation.get("camera_intrinsics"),
                           camera_poses=observation.get("camera_poses"))
         return fields
 
@@ -309,6 +473,7 @@ class DexjocoBackend:
     def start(self, *, formal, seed):
         self._evaluation = None
         self._raw = None
+        self._command = None
         c = self.config
         collection = c.formal_collection if formal else c.eval_seed
         TK.layout(c.task, collection, int(seed))
@@ -323,7 +488,7 @@ class DexjocoBackend:
         timeouts = TK.task_timeouts(c.task)
         reset = self.sim.start(task=c.task, collection=collection, layout_id=int(seed), run_id=run_id,
                                sim_gpu=c.sim_gpu, startup_timeout=timeouts["startup_seconds"],
-                               include_depth=self._geometry(),
+                               include_depth=self._render_depth(),
                                # The supervisor's own wall limit also bounds the episode.
                                episode_timeout_seconds=int(c.formal.wall_seconds))
         limit = int(reset["native_step_limit"])

@@ -17,6 +17,8 @@ from services.simulator.io import RejectedBeforeAction, reject_unless
 
 STATUS, OBSERVE = "dexjoco_status", "dexjoco_observe"
 STEP, HOLD = "dexjoco_step", "dexjoco_hold"
+# Target-level motion (agent as policy): the server turns a goal into official rows.
+MOVE_EE, HAND = "dexjoco_move_ee", "dexjoco_hand"
 PIXEL_TO_POSITION = "dexjoco_pixel_to_position"
 ROTATION_MATH = RM.TOOL
 PREVIEW_DESCRIBE, PREVIEW_RUN = "dexjoco_preview_describe", "dexjoco_preview_run"
@@ -24,9 +26,25 @@ PREVIEW_CAMERAS = ("preview_front", "preview_side", "preview_top")
 # Robot-only preview: never advances the episode or counts against its step limit.
 PREVIEW_TOOLS = frozenset({PREVIEW_DESCRIBE, PREVIEW_RUN})
 
-ROBOT_TOOLS = frozenset({STATUS, OBSERVE, STEP, HOLD, PIXEL_TO_POSITION, ROTATION_MATH, *PREVIEW_TOOLS})
+ROBOT_TOOLS = frozenset({STATUS, OBSERVE, STEP, HOLD, PIXEL_TO_POSITION, ROTATION_MATH, *PREVIEW_TOOLS, MOVE_EE, HAND})
 assert ROBOT_TOOLS == DEXJOCO_TOOLS, "services/benchmarks.py and the DexJoCo tool set disagree"
-MUTATING = frozenset({STEP, HOLD})
+MUTATING = frozenset({STEP, HOLD, MOVE_EE, HAND})
+# Target-level motion: flange speed per 20 ms step (m, rad) for each speed profile, the settle
+# check, and caps that keep one call from running away.
+SPEEDS = {"transit": (0.008, 0.04), "precision": (0.0025, 0.015)}
+SETTLE_CHUNK = 10
+# The official flange controller converges slowly (time constant about 20 steps). While settling,
+# the command leads the target by LEAD_GAIN times the measured error (at most MAX_LEAD_M, so contact
+# is not pushed into without bound), which shortens that several-fold.
+LEAD_GAIN = 1.5
+MAX_LEAD_M = 0.03
+# Stalled: the flange moved less than this over a settle chunk without getting closer.
+REST_M = 0.002
+ROTATION_TOLERANCE_RAD = 0.05
+MAX_MOTION_STEPS = 600
+# A hand joint whose measured angle stays this far from its target is reported as blocked
+# (usually by contact with an object).
+BLOCKED_JOINT_RAD = 0.15
 MAX_ACTION_ROWS = 150
 # Every FRAME_STRIDE-th executed step is saved as a frame (plus the final step).
 FRAME_STRIDE = 10
@@ -101,6 +119,37 @@ def tool_definitions():
             "Each held step reports the row it sent as its executed_action and counts against the episode limit."),
          "inputSchema": {"type": "object", "required": ["steps"], "additionalProperties": False, "properties": {
              "steps": {"type": "integer", "minimum": 1, "maximum": MAX_ACTION_ROWS}}}},
+        {"name": MOVE_EE, "description": (
+            "Move one arm's flange (end effector) to a target pose; the server interpolates the motion into "
+            f"official action rows ({CONTROL_TEXT}), runs them with the official flange controller, then holds the "
+            "target until the measured flange is within tolerance, max_settle_steps run out, or it stalls short "
+            "of the target (stalled: contact or out of reach). Give position_m "
+            "(world) or delta_m (world offset from the measured flange position), and/or rotation (world; default: "
+            "keep the measured orientation). hand_joints_rad (optional) moves that arm's hand to new joint targets "
+            "along the way; otherwise the hand keeps its last commanded targets, so a grasp stays closed. speed "
+            "transit is fast (about 0.24 m/s), precision slow (about 0.075 m/s) for approaches and contact. The "
+            "other arm (dual-arm tasks) keeps its last commanded targets. Replies with the reached flange pose and "
+            "its errors, the steps used, and the final frame; every step counts against the episode limit."),
+         "inputSchema": {"type": "object", "additionalProperties": False, "properties": {
+             "arm": _ARM,
+             "position_m": {**_vector(3), "description": "flange target position, world frame (m)"},
+             "delta_m": {**_vector(3), "description": "world-frame offset from the measured flange position (m)"},
+             "rotation": _ROTATION,
+             "hand_joints_rad": {**_vector(16), "description": "optional hand joint targets (rad), that arm's order"},
+             "speed": {"type": "string", "enum": list(SPEEDS), "default": "transit"},
+             "position_tolerance_m": {"type": "number", "minimum": 0.002, "maximum": 0.05, "default": 0.01},
+             "max_settle_steps": {"type": "integer", "minimum": 0, "maximum": 120, "default": 30}}}},
+        {"name": HAND, "description": (
+            "Move one arm's 16 Allegro hand joints to absolute targets (rad, that hand's joint order; status gives "
+            "it) over `steps` environment steps, with the arm holding its last commanded flange target, then hold "
+            "settle_steps more. Replies with the measured joints, each joint's tracking error and the joints still "
+            f"more than {BLOCKED_JOINT_RAD} rad from their targets (blocked, usually by contact), and the final "
+            "frame. The targets stay commanded afterwards, so a closed hand keeps squeezing through later moves."),
+         "inputSchema": {"type": "object", "required": ["joints_rad"], "additionalProperties": False, "properties": {
+             "arm": _ARM,
+             "joints_rad": {**_vector(16), "description": "absolute hand joint targets (rad)"},
+             "steps": {"type": "integer", "minimum": 1, "maximum": 60, "default": 15},
+             "settle_steps": {"type": "integer", "minimum": 0, "maximum": 30, "default": 5}}}},
         {"name": PIXEL_TO_POSITION, "description": (
             "Back-project 1..32 pixels of the current observation's depth images into world-frame points "
             "(metres), using each camera's calibration. Pass the observation's step_id."),
@@ -169,6 +218,8 @@ _ROTATION = {
         "matrix": {"type": "array", "items": _vector(3), "minItems": 3, "maxItems": 3, "description": "rows of R"},
         "axis_angle": {"type": "object", "required": ["axis", "angle_rad"], "additionalProperties": False,
                        "properties": {"axis": _vector(3), "angle_rad": _NUMBER}}}}
+_ARM = {"type": "string", "enum": ["right", "left"], "default": "right",
+        "description": "dual-arm tasks: which arm; single-arm tasks have only the right arm"}
 _POSE = {"type": "object", "minProperties": 1, "additionalProperties": False,
          "description": "position_m (m) and rotation; a missing position is zero, a missing rotation the identity.",
          "properties": {"position_m": _vector(3), "rotation": _ROTATION}}
@@ -204,6 +255,21 @@ def validate_state(state, dim):
                       f"initial_state[{start}:{start + 4}] must be a non-zero flange quaternion [w, x, y, z]")
 
 
+def _arm(arguments, action_dim):
+    arm = arguments.get("arm", "right")
+    reject_unless(arm in ("right", "left"), "arm must be 'right' or 'left'")
+    reject_unless(arm == "right" or action_dim != 22, "this task has one arm: arm must be 'right'")
+
+
+def arm_slices(dual_arm, arm):
+    """(row flange, row hand, state position, state quaternion, state hand) slices of one arm."""
+    if not dual_arm:
+        return slice(0, 6), slice(6, 22), slice(0, 3), slice(3, 7), slice(7, 23)
+    if arm == "right":
+        return slice(0, 6), slice(6, 22), slice(0, 3), slice(3, 7), slice(14, 30)
+    return slice(22, 28), slice(28, 44), slice(7, 10), slice(10, 14), slice(30, 46)
+
+
 def validate_request(name, arguments, *, action_dim=None):
     """Complete schema/shape validation before dispatch; raises RejectedBeforeAction."""
     reject_unless(isinstance(arguments, dict), "arguments must be an object")
@@ -216,6 +282,30 @@ def validate_request(name, arguments, *, action_dim=None):
         _only(arguments, ("steps",))
         steps = arguments.get("steps")
         reject_unless(type(steps) is int and 1 <= steps <= MAX_ACTION_ROWS, f"steps must be an integer 1..{MAX_ACTION_ROWS}")
+    elif name == MOVE_EE:
+        _only(arguments, ("arm", "position_m", "delta_m", "rotation", "hand_joints_rad", "speed",
+                          "position_tolerance_m", "max_settle_steps"))
+        _arm(arguments, action_dim)
+        reject_unless(not ("position_m" in arguments and "delta_m" in arguments), "give position_m or delta_m, not both")
+        reject_unless(any(k in arguments for k in ("position_m", "delta_m", "rotation", "hand_joints_rad")),
+                      "give a target: position_m, delta_m, rotation and/or hand_joints_rad")
+        for key, size in (("position_m", 3), ("delta_m", 3), ("hand_joints_rad", 16)):
+            if key in arguments:
+                RM._vector(arguments[key], size, key)
+        if "rotation" in arguments:
+            RM._rotation(arguments["rotation"], "rotation")
+        reject_unless(arguments.get("speed", "transit") in SPEEDS, f"speed must be one of {list(SPEEDS)}")
+        tolerance = arguments.get("position_tolerance_m", 0.01)
+        reject_unless(_finite(tolerance) and 0.002 <= tolerance <= 0.05, "position_tolerance_m must be 0.002..0.05")
+        settle = arguments.get("max_settle_steps", 30)
+        reject_unless(type(settle) is int and 0 <= settle <= 120, "max_settle_steps must be an integer 0..120")
+    elif name == HAND:
+        _only(arguments, ("arm", "joints_rad", "steps", "settle_steps"))
+        _arm(arguments, action_dim)
+        RM._vector(arguments.get("joints_rad"), 16, "joints_rad")
+        steps, settle = arguments.get("steps", 15), arguments.get("settle_steps", 5)
+        reject_unless(type(steps) is int and 1 <= steps <= 60, "steps must be an integer 1..60")
+        reject_unless(type(settle) is int and 0 <= settle <= 30, "settle_steps must be an integer 0..30")
     elif name == ROTATION_MATH:
         RM.validate(arguments)
     elif name == PREVIEW_DESCRIBE:

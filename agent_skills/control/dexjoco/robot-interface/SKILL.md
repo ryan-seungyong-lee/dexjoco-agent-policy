@@ -1,6 +1,6 @@
 ---
 name: robot-interface
-description: The DexJoCo robot - Franka Panda arm{% if robot.arms == 'dual' %}s{% endif %} with 16-DoF Allegro hand{% if robot.arms == 'dual' %}s{% endif %} - its official action rows (flange pose as a rotation vector plus hand joint targets), its state vector, frames, cameras and control response. Read before composing robot actions.
+description: The DexJoCo robot - Franka Panda arm{% if robot.arms == 'dual' %}s{% endif %} with 16-DoF Allegro hand{% if robot.arms == 'dual' %}s{% endif %} - {% if action_targets %}its motion tools (flange target poses and hand joint targets), {% else %}its official action rows (flange pose as a rotation vector plus hand joint targets), {% endif %}its state vector, frames, cameras and control response. Read before {% if action_targets %}commanding the robot{% else %}composing robot actions{% endif %}.
 ---
 
 # Robot interface: Panda + Allegro
@@ -16,6 +16,46 @@ in a 16-joint Allegro hand. There is no gripper: every grasp is made with the fi
 `{{ robot.status }}` reports the exact action and state layouts; this skill explains them.
 They are the official DexJoCo action and state layouts.
 
+{% if action_targets %}
+## Commanding motion
+
+You command targets; the server turns each into official 20 ms steps
+({{ robot.hz }} per second), runs them with the official controllers and reports
+what was reached. Every step counts against the episode step limit (`episode_limits`),
+and the episode ends at once on success or on a task failure condition.
+
+- `dexjoco_move_ee` moves a flange (end effector) to a target pose: `position_m`
+  (world) or `delta_m` (a world offset from the measured flange position), and/or
+  `rotation` (world; default: keep the current orientation). It interpolates at the
+  chosen `speed` (`transit` about 0.24 m/s, `precision` about 0.075 m/s for approaches
+  and contact), then holds the target until the measured flange is within
+  `position_tolerance_m` or `max_settle_steps` (default 30) run out (while settling it leads the target by the remaining error, so the slow controller converges sooner), or stops early as `stalled` when it rests short of the target (contact or out of reach). The reply's `motion` gives
+  `reached`, the measured pose, the position and rotation errors and `steps_used`.
+  Every step counts against the episode limit: plan a few deliberate moves rather than many
+  small ones, and when a move reports `stalled`, change the approach instead of repeating it.
+  Pass `hand_joints_rad` to reshape the hand during the same move.
+- `dexjoco_hand` moves one hand's 16 joints to absolute targets over `steps` steps
+  with the arm held, then `settle_steps` more. Its `motion` lists the measured joints,
+  each joint's tracking error and `blocked_joints`: joints still far from target,
+  usually because a finger touches something.
+- Targets you do not change stay as last commanded: a hand closed with `dexjoco_hand`
+  keeps squeezing through later `dexjoco_move_ee` calls, and `dexjoco_hold(steps=n)`
+  keeps every commanded target for n steps.
+{% if robot.arms == 'dual' %}
+- `arm` (`right` or `left`) picks the arm; the other arm keeps its targets. The left
+  hand's joints come in mirrored order: **`rf0-3, mf0-3, ff0-3, th0-3`**; the right
+  hand's are `ff0-3, mf0-3, rf0-3, th0-3`.
+{% else %}
+- Hand joints come in the order `ff0-3, mf0-3, rf0-3, th0-3`.
+{% endif %}
+
+The flange is the arm's tool plate; the hand is mounted on it. Orientations are
+world-frame: give `rotation` as a quaternion `[w, x, y, z]`, a rotation vector (axis x
+angle, rad), a matrix or an axis and angle. `dexjoco_rotation_math` converts between
+them and composes and relates poses (`compose_pose`, `relative_pose`,
+`flange_target`) without an episode.
+
+{% else %}
 ## One action row
 
 Each `dexjoco_step` row is one simulation step: it advances 20 ms of physics, and the
@@ -61,6 +101,7 @@ Each row counts once against the episode step limit (`episode_limits`); the epis
 also ends at once on success or on a task failure condition, and later rows of the
 same call are not run.
 
+{% endif %}
 ## The measured state
 
 `state` is the official state vector:
@@ -80,9 +121,10 @@ same call are not run.
 | `[7:23]` | hand joint positions (rad), `ff0-3, mf0-3, rf0-3, th0-3` |
 {% endif %}
 
+{% if not action_targets %}
 Build every row from the latest measured state: convert the quaternion to a rotation
 vector, copy the hand joints, then change only what you intend to move
-(`dexjoco_rotation_math` `row_from_state` returns that hold row exactly). There are no
+(`dexjoco_rotation_math` `row_from_state` returns that hold row exactly). {% endif %}There are no
 arm joint angles and no object positions in the state; find objects in the images.
 
 ## Start pose and frames
@@ -115,12 +157,20 @@ arm joint angles and no object positions in the state; find objects in the image
 
 Measured from the start pose through the official step:
 
+{% if action_targets %}
+- **Arm:** an operational-space controller pulls the flange toward each interpolated
+  target with a stiff spring and strong damping; `dexjoco_move_ee` waits for it to
+  settle, so check `reached` and the errors. The arm avoids nothing: plan clearance
+  over the table and objects yourself, for example by moving above an object first
+  and then straight down.
+{% else %}
 - **Arm:** an operational-space controller pulls the flange toward the target with
   a stiff spring and strong damping, so a large jump is followed slowly. A 10 cm
   target change leaves about 6 cm of error after 10 steps, 2 cm after 30 and 1 cm
   after 45. Send long moves as a sequence of nearby targets (a few
   millimetres to 1-2 cm apart), and hold a few steps before precise contact. The arm
   avoids nothing: plan clearance over the table and objects yourself.
+{% endif %}
 - **Elbow:** only the flange pose is commanded; the rest of the arm drifts toward a
   rest posture. Check the overview image for elbow contact on wide or low moves.
 - **Hand:** each joint is a position servo with a weak spring
@@ -131,9 +181,11 @@ Measured from the start pose through the official step:
  A finger stopped by an object presses with a force that grows with the
   remaining target error, so command flexion beyond the contact angle to squeeze,
   and verify grasps visually; see [hand-control](../hand-control/SKILL.md).
+{% if not action_targets %}
 - **Dry run:** `dexjoco_preview_run` runs rows through the same controller on a
   robot-only simulator and shows the arm from fixed cameras without changing the
   episode ([motion-preview](../motion-preview/SKILL.md)).
+{% endif %}
 
 ## Cameras
 
@@ -146,6 +198,12 @@ Images are 640x640 RGB. Motion replies return the final frame inline and save ev
 {% if camera_geometry %}
 Depth images and `camera_intrinsics` / `camera_poses` (world frame) come with every
 observation; see [object-localization](../object-localization/SKILL.md).
+{% elif depth_images %}
+Depth images (linear depth in metres, no camera intrinsics or poses) come with every
+observation; see [object-localization](../object-localization/SKILL.md).
+{% elif camera_params %}
+`camera_intrinsics` / `camera_poses` (world frame) come with every observation, but no
+depth; see [object-localization](../object-localization/SKILL.md).
 {% else %}
 For locating objects without depth, see [object-localization](../object-localization/SKILL.md).
 {% endif %}
@@ -170,10 +228,15 @@ For locating objects without depth, see [object-localization](../object-localiza
 ## Related skills
 
 - [hand-control](../hand-control/SKILL.md) for finger postures, grasps and releases.
+{% if not action_targets %}
 - [motion-preview](../motion-preview/SKILL.md) to watch rows on a robot-only simulator
   before running them in the episode.
+{% endif %}
 - [object-localization](../object-localization/SKILL.md) for where objects are.
-{% if expert_demonstrations %}
+{% if expert_human %}
+- [learn-from-human-demos](../learn-from-human-demos/SKILL.md) for the recordings of
+  people doing a similar task in `runtime/experts/`.
+{% elif expert_demonstrations %}
 - [learn-from-experts](../learn-from-experts/SKILL.md) for the recorded human
   demonstrations in `runtime/experts/`.
 {% endif %}

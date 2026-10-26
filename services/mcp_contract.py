@@ -9,7 +9,9 @@ from dataclasses import dataclass
 from services.benchmarks import ALL_ROBOT_TOOLS, BENCHMARKS, DEFAULT
 
 GEOMETRY_TOOLS = frozenset().union(*(b.geometry_tools for b in BENCHMARKS.values()))
-PROFILES = ('rgbd', 'rgb-only')
+# rgbd: RGB + depth + camera calibration; rgb-depth: RGB + depth, no calibration;
+# rgb-camera: RGB + calibration (intrinsics, poses), no depth; rgb-only: RGB alone.
+PROFILES = ('rgbd', 'rgb-depth', 'rgb-camera', 'rgb-only')
 
 
 # Session lifecycle tools in exploration, and those of them scoped to one environment.
@@ -19,12 +21,14 @@ BUNDLE_TOOLS = frozenset({'register', 'rehearse', 'submit'})
 EPISODE_TOOLS = frozenset({'start_episode', 'evaluate', 'finish'})
 # Recorded in MCP_CONTRACT.json; auto-research is the only experiment mode.
 MODE = 'auto-research'
-GEOMETRY_KEYS = frozenset({
-    'depth', 'camera_parameters', 'intrinsic_matrix', 'extrinsic_matrix', 'camera_to_world_usd',
-    'camera_poses', 'camera_intrinsics',
+DEPTH_KEYS = frozenset({
+    'depth',
     # Every registered benchmark camera's depth array (<camera>_depth_m).
     *(f'{camera}_depth_m' for bench in BENCHMARKS.values() for camera in bench.robot.get('cameras', ())),
 })
+CAMERA_KEYS = frozenset({'camera_parameters', 'intrinsic_matrix', 'extrinsic_matrix', 'camera_to_world_usd',
+                         'camera_poses', 'camera_intrinsics'})
+GEOMETRY_KEYS = DEPTH_KEYS | CAMERA_KEYS
 
 
 @dataclass(frozen=True)
@@ -33,11 +37,22 @@ class ObservationProfile:
 
     def __post_init__(self):
         if self.name not in PROFILES:
-            raise ValueError('observation_profile must be rgbd or rgb-only')
+            raise ValueError(f"observation_profile must be one of {', '.join(PROFILES)}")
+
+    @property
+    def depth(self):
+        """Depth images (and their stats) reach the agent."""
+        return self.name in ('rgbd', 'rgb-depth')
+
+    @property
+    def camera_params(self):
+        """Camera intrinsics and poses reach the agent."""
+        return self.name in ('rgbd', 'rgb-camera')
 
     @property
     def geometry(self):
-        return self.name == 'rgbd'
+        """Depth and calibration together: what the pixel-to-position tools need."""
+        return self.depth and self.camera_params
 
     def tools(self, definitions):
         tools = deepcopy(definitions)
@@ -47,20 +62,37 @@ class ObservationProfile:
         for tool in tools:
             if tool['name'] in GEOMETRY_TOOLS:
                 continue
-            tool['description'] = tool.get('description', '').replace('RGB/depth', 'RGB').replace(
-                'attachments, calibration,', 'attachments (no depth or calibration),')
+            description = tool.get('description', '')
+            if not self.depth:
+                description = description.replace('RGB/depth', 'RGB').replace(
+                    'RGB (640x640) and depth attachments', 'RGB (640x640) attachments')
+            if self.depth and not self.camera_params:
+                description = description.replace('attachments, calibration,', 'attachments (no calibration),')
+            elif self.camera_params and not self.depth:
+                description = description.replace('attachments, calibration,',
+                                                  'attachments (no depth), calibration,')
+            else:
+                description = description.replace('attachments, calibration,',
+                                                  'attachments (no depth or calibration),')
+            tool['description'] = description
             result.append(tool)
         return result
+
+    def stripped_keys(self):
+        return (frozenset() if self.depth else DEPTH_KEYS) | (frozenset() if self.camera_params else CAMERA_KEYS)
 
     def clean(self, value):
         if self.geometry:
             return value
+        return self._clean(value, self.stripped_keys())
+
+    def _clean(self, value, keys):
         if isinstance(value, dict):
-            return {key: self.clean(item) for key, item in value.items()
-                    if str(key).lower() not in GEOMETRY_KEYS}
+            return {key: self._clean(item, keys) for key, item in value.items()
+                    if str(key).lower() not in keys}
         if isinstance(value, (list, tuple)):
-            return [self.clean(item) for item in value
-                    if not (isinstance(item, dict) and item.get('kind') == 'depth')]
+            return [self._clean(item, keys) for item in value
+                    if self.depth or not (isinstance(item, dict) and item.get('kind') == 'depth')]
         return value
 
 
@@ -78,6 +110,9 @@ class Contract:
     # exploration has no bundle tools.
     bundle_tools: bool = True
     external_perception: bool = True
+    # 'rows': the benchmark's official per-step action rows (RAX). 'targets': agent as policy's
+    # target-level motion tools instead (DexJoCo: dexjoco_move_ee and dexjoco_hand).
+    action_interface: str = 'rows'
 
     def __post_init__(self):
         if self.benchmark not in BENCHMARKS:
@@ -97,6 +132,10 @@ class Contract:
             raise ValueError('bundle_tools must be a boolean')
         if type(self.external_perception) is not bool:
             raise ValueError('external_perception must be a boolean')
+        if self.action_interface not in ('rows', 'targets'):
+            raise ValueError("action_interface must be 'rows' or 'targets'")
+        if self.action_interface == 'targets' and not self.bench.target_tools:
+            raise ValueError(f'{self.bench.label} has no target-level motion tools')
 
     @classmethod
     def from_config(cls, config, *, isolated=False):
@@ -106,7 +145,8 @@ class Contract:
                    0 if isolated else getattr(config, 'subagents', 0),
                    getattr(config, 'benchmark', DEFAULT),
                    isolated or not getattr(config, 'agent_formal', False),
-                   getattr(config, 'external_perception', True))
+                   getattr(config, 'external_perception', True),
+                   'targets' if getattr(config, 'agent_policy', False) else 'rows')
 
     @property
     def subagent_cap(self):
@@ -123,7 +163,8 @@ class Contract:
 
     @property
     def robot_names(self):
-        tools = self.bench.robot_tools
+        bench = self.bench
+        tools = bench.robot_tools - (bench.row_tools if self.action_interface == 'targets' else bench.target_tools)
         return tools if self.observation.geometry else tools - self.bench.geometry_tools
 
     @property
@@ -204,6 +245,8 @@ class Contract:
         manifest = {'mode': MODE, 'phase': self.phase, 'observation_profile': self.observation_profile,
                     'exploration_envs': self.environments, 'subagents': self.subagent_cap, 'robot_tools': sorted(self.robot_names),
                     'gemini': self.external_perception, 'benchmark': self.benchmark}
+        if self.action_interface != 'rows':
+            manifest['action_interface'] = self.action_interface
         return manifest
 
 def observation_for(service):

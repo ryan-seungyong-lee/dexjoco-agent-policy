@@ -65,10 +65,78 @@ def cached_experts(cache_root, task):
     return demos
 
 
-def expert_root(task):
-    """Host directory the agent reads at runtime/experts."""
-    cached_experts(demos_root(), task)
-    return (demos_root() / task / "experts").resolve()
+HUMAN_SCHEMA = "dexjoco_human_demos_v1"
+# What each video-only view keeps of an expert episode directory.
+ROBOT_VIDEO_PARTS = ("videos", "frames", "episode.json")
+HUMAN_VIDEO_PARTS = ("video.mp4", "frames", "episode.json")
+HUMAN_MOTION_FILES = ("hand_trajectory.npz", "phases.json")
+
+
+def human_demos_root():
+    return PROJECT / "runtime" / "reference-demos" / "dexjoco-human"
+
+
+def cached_human_demos(cache_root, task, *, motion):
+    """Installed human demonstrations of one task (scripts/build_human_demos.py), in order."""
+    task_info(task)
+    directory = (Path(cache_root).expanduser() / task).resolve()
+    try:
+        manifest = json.loads((directory / "manifest.json").read_text())
+    except (OSError, ValueError) as error:
+        raise DemonstrationError(f"Human demonstrations for {task} are not installed; "
+                                 f"run scripts/build_human_demos.py for {task}") from error
+    if manifest.get("schema") != HUMAN_SCHEMA or manifest.get("task") != task:
+        raise DemonstrationError(f"Invalid human demonstration manifest for {task}")
+    if len(manifest.get("experts", ())) != EXPERTS:
+        raise DemonstrationError(f"Human demonstration set for {task} must hold {EXPERTS} clips")
+    experts_dir = directory / "experts"
+    demos = []
+    for name in manifest["experts"]:
+        path = (experts_dir / name).resolve()
+        required = HUMAN_VIDEO_PARTS + (HUMAN_MOTION_FILES if motion else ())
+        if not path.is_relative_to(experts_dir) or not all((path / part).exists() for part in required):
+            raise DemonstrationError(f"Incomplete human demonstration {name} for {task}")
+        demos.append(path)
+    return demos
+
+
+def _video_view(demos, view, parts):
+    """A copy of the expert directories holding only `parts` (rebuilt when absent)."""
+    view = Path(view)
+    if view.is_dir() and all((view / demo.name).is_dir() for demo in demos):
+        return view.resolve()
+    staging = view.parent / f".{view.name}.{uuid.uuid4().hex}.tmp"
+    staging.mkdir(mode=0o755)
+    try:
+        for demo in demos:
+            (staging / demo.name).mkdir(mode=0o755)
+            for part in parts:
+                source = demo / part
+                if source.is_dir():
+                    shutil.copytree(source, staging / demo.name / part)
+                elif source.is_file():
+                    shutil.copyfile(source, staging / demo.name / part)
+        _replace_directory(staging, view)
+    finally:
+        if staging.exists():
+            shutil.rmtree(staging)
+    return view.resolve()
+
+
+def expert_root(task, content="full"):
+    """Host directory the agent reads at runtime/experts, for the session's expert content."""
+    if content == "full":
+        cached_experts(demos_root(), task)
+        return (demos_root() / task / "experts").resolve()
+    if content == "video":
+        demos = cached_experts(demos_root(), task)
+        return _video_view(demos, demos_root() / task / "experts-video", ROBOT_VIDEO_PARTS)
+    if content in ("human-video", "human-full"):
+        demos = cached_human_demos(human_demos_root(), task, motion=content == "human-full")
+        if content == "human-full":
+            return (human_demos_root() / task / "experts").resolve()
+        return _video_view(demos, human_demos_root() / task / "experts-video", HUMAN_VIDEO_PARTS)
+    raise DemonstrationError(f"DexJoCo has no {content!r} expert content")
 
 
 def keyframes(demo):

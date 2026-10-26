@@ -11,6 +11,7 @@ import uuid
 
 PROJECT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT))
+from services.mcp_contract import PROFILES
 from services.controller.config import AGENT_EFFORTS, EXPERT_CONTENTS, Configuration, Limits, FORMAL_EPISODES, MAX_EXPLORATION_EPISODES
 from services.benchmarks import BENCHMARKS, DEFAULT, benchmark as benchmark_named
 from services.controller.batch import validate_layouts
@@ -64,7 +65,7 @@ def arguments():
                         help='Expose the optional external Gemini perception tool')
     parser.add_argument('--sim-gpu', required=True, help='Simulator GPU ordinal or UUID (the agent has no GPU)')
     parser.add_argument('--episodes', type=int, default=5)
-    parser.add_argument('--observation-profile', choices=('rgbd', 'rgb-only'), default='rgbd')
+    parser.add_argument('--observation-profile', choices=PROFILES, default='rgbd')
     parser.add_argument('--write-handoff', choices=('off', 'on'), default='off',
                         help='Install the transfer-handoff skill (for source trials of adaptation)')
     parser.add_argument('--adaptation-source', type=Path,
@@ -74,6 +75,9 @@ def arguments():
     parser.add_argument('--agent-formal', choices=('off', 'on'), default='off',
                         help='Evaluation mode: off = code alone (submit one rehearsed bundle); on = live copies of '
                              'the agent play the held-out layouts (no bundle tools in exploration)')
+    parser.add_argument('--agent-policy', choices=('off', 'on'), default='off',
+                        help='Agent as policy: no exploration; a fresh agent that carries nothing plays each '
+                             'formal episode (sets --agent-formal on, --formal-context clear, no transfer parts)')
     parser.add_argument('--formal-context', choices=('resume', 'compact', 'clear'), default='compact',
                         help='Agent formal: conversation carried into each formal copy')
     parser.add_argument('--transfer-parts', default='memory,code,handoff',
@@ -124,6 +128,7 @@ def main():
     data_bytes = args.recording_gib*1024**3
     def limits(seconds, memory=8192):
         return Limits(seconds, memory, 4, 256, 1024, data_bytes)
+    agent_policy = args.agent_policy == 'on'
     config = Configuration(root, args.task,
         exploration_seeds(args),
         args.formal_seed, args.exploration_collection, mapping[args.sim_gpu],
@@ -133,10 +138,12 @@ def main():
         expert_content=args.expert_content,
         formal_episodes=args.formal_episodes, formal_eval_seed=args.formal_eval_seed,
         formal_workers=args.formal_workers, observation_profile=args.observation_profile, exploration_envs=args.exploration_envs, subagents=args.subagents,
-        agent_formal=args.agent_formal == 'on', formal_context=args.formal_context,
+        agent_formal=args.agent_formal == 'on' or agent_policy, agent_policy=agent_policy,
+        formal_context='clear' if agent_policy else args.formal_context,
         write_handoff=args.write_handoff == 'on', adaptation_context=args.adaptation_context,
         adaptation_source=str(args.adaptation_source.resolve()) if args.adaptation_source else None,
-        transfer_parts=tuple(p for p in args.transfer_parts.split(',') if p), transfer_mb=args.transfer_mb,
+        transfer_parts=() if agent_policy else tuple(p for p in args.transfer_parts.split(',') if p),
+        transfer_mb=args.transfer_mb,
         task_rules=args.task_rules, agent_cli=args.agent_cli,
         agent_provider=args.agent_provider, agent_effort=args.agent_effort,
         external_perception=args.external_perception == 'on',

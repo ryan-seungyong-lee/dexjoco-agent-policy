@@ -12,10 +12,14 @@ from services.demonstration_io import DEMONSTRATION_CONTEXTS
 FORMAL_EPISODES = 50  # Default held-out formal episodes of a new session.
 # Reasoning efforts both agent CLIs (Codex model_reasoning_effort, Claude Code --effort)
 # and OpenRouter accept; xhigh is the established default.
-AGENT_EFFORTS = ('xhigh', 'max')
+AGENT_EFFORTS = ('xhigh', 'max', 'high')
 # What the mounted expert episodes hold: 'full' (commanded references, measured motion, object
 # states and camera) or 'images' (front-camera video, previews and depth only).
-EXPERT_CONTENTS = ('full', 'images')
+# DexJoCo also takes 'video' (the robot experts' videos and keyframes, no actions or states),
+# 'human-video' (human demonstrations of a similar task: video and keyframes) and 'human-full'
+# (plus tracked 3-D hand motion, contact phases and an Allegro hand-shape retarget).
+EXPERT_CONTENTS = ('full', 'images', 'video', 'human-video', 'human-full')
+HUMAN_EXPERT_CONTENTS = ('human-video', 'human-full')
 # What TASK.md gives of the task's rules: 'public' (the benchmark's public task definition), or
 # 'code-summary' (plus rules summarized from the task code), where a benchmark offers it.
 TASK_RULES = ('public', 'code-summary')
@@ -109,6 +113,11 @@ class Configuration:
     # played live by a copy of the agent that carries only the transfer folders and, unless
     # formal_context is 'clear', its conversation.
     agent_formal: bool = False
+    # Agent as policy: no exploring agent at all. Each held-out episode is played by a fresh agent
+    # that carries nothing (no conversation, no folders) and sees only the task, its observations,
+    # the robot tools and any mounted expert episodes. Needs agent_formal with formal_context
+    # 'clear' and no transfer_parts.
+    agent_policy: bool = False
     write_handoff: bool = False  # Install the transfer-handoff skill (source trials).
     formal_context: str = 'compact'  # resume | compact | clear
     transfer_parts: tuple[str, ...] = ('memory', 'code', 'handoff')
@@ -182,6 +191,11 @@ class Configuration:
             raise ValueError('write_handoff must be true or false')
         if type(self.agent_formal) is not bool:
             raise ValueError('agent_formal must be true or false')
+        if type(self.agent_policy) is not bool:
+            raise ValueError('agent_policy must be true or false')
+        if self.agent_policy and not (self.agent_formal and self.formal_context == 'clear' and not self.transfer_parts
+                                      and self.adaptation_source is None):
+            raise ValueError('agent_policy needs agent_formal, formal_context clear, no transfer_parts and no adaptation')
         if self.formal_context not in CONTEXTS:
             raise ValueError(f'formal_context must be one of {CONTEXTS}')
         validate_parts(self.transfer_parts)

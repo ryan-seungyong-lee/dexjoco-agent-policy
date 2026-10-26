@@ -175,7 +175,7 @@ class Supervisor:
                 from services.controller.config import retire_fields
                 self.state['configuration'] = retire_fields(self.state['configuration'])
                 # Agent-formal fields: trials saved before them ran with their defaults.
-                for key in ('agent_formal', 'formal_context', 'transfer_parts', 'transfer_mb', 'formal_sim_gpus'):
+                for key in ('agent_formal', 'agent_policy', 'formal_context', 'transfer_parts', 'transfer_mb', 'formal_sim_gpus'):
                     self.state['configuration'].setdefault(key, json.loads(json.dumps(getattr(type(config), key))))
                 for phase in ('development', 'formal', 'training'):
                     self.state['configuration'][phase].pop('gemini_calls', None)

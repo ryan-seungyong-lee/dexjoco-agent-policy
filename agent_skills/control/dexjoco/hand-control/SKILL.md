@@ -1,6 +1,6 @@
 ---
 name: hand-control
-description: Shape, close and open the 16-DoF Allegro hand{% if robot.arms == 'dual' %}s{% endif %} with official action rows - joint roles, grasp postures, squeezing past contact, holding and releasing - and verify grasps from images. Use before any grasp, press or release.
+description: Shape, close and open the 16-DoF Allegro hand{% if robot.arms == 'dual' %}s{% endif %} {% if action_targets %}with dexjoco_hand{% else %}with official action rows{% endif %} - joint roles, grasp postures, squeezing past contact, holding and releasing - and verify grasps from images. Use before any grasp, press or release.
 ---
 
 # Hand control: Allegro
@@ -13,7 +13,7 @@ thumb). For the index, middle and ring fingers, joint 0 spreads the finger sidew
 (about -0.1..1.7) rotate and flex it toward the fingertips. Before relying on a
 posture, move one joint at a time on the empty hand and watch the wrist image to see
 what it does. See
-[robot-interface](../robot-interface/SKILL.md) for where these sit in a row{% if robot.arms == 'dual' %}, and remember the left hand's mirrored order{% endif %}.
+[robot-interface](../robot-interface/SKILL.md) for {% if action_targets %}the joint order{% else %}where these sit in a row{% endif %}{% if robot.arms == 'dual' %}, and remember the left hand's mirrored order{% endif %}.
 
 ## Postures
 
@@ -32,11 +32,20 @@ what it does. See
 Joints are weak position servos: a finger stopped by an object pushes with a force
 that grows with the gap between its target and its measured angle. To hold an
 object, command flexion clearly beyond the contact angle (for example 0.2-0.4 rad
+{% if action_targets %}
+past where the fingers stopped, as `blocked_joints` and the tracking errors show).
+Commanded targets persist, so later moves keep squeezing; sending the measured joints
+as new targets releases the squeeze.
+
+- Close over several steps (`dexjoco_hand` `steps` 10-30), then hold a few steps
+  before lifting.
+{% else %}
 past where the fingers stopped), and keep that target on every following row while
 the object is held. Copying the measured hand joints into later rows releases the
 squeeze.
 
 - Close over several steps (10-30 rows), then hold a few steps before lifting.
+{% endif %}
 - Lift slowly at first and look: an object that slides in the fingers needs a
   different posture or more squeeze, not a faster lift.
 - Keep the flange target moving smoothly while a grasped object is carried; large
@@ -44,7 +53,7 @@ squeeze.
 
 ## Releasing and contact
 
-- Release by opening the fingers over a few rows with the flange held still, then
+- Release by opening the fingers over a few {% if action_targets %}steps{% else %}rows{% endif %} with the flange held still, then
   retreat upward.
 - Verify every grasp and release from images (wrist and overview), not from the
   commanded joints: the measured joints show where the fingers stopped, not whether

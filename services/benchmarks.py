@@ -15,6 +15,8 @@ DEFAULT = 'dexjoco'  # Configurations and manifests without a benchmark field.
 DEXJOCO_TOOLS = frozenset({
     'dexjoco_status', 'dexjoco_observe', 'dexjoco_step', 'dexjoco_hold', 'dexjoco_pixel_to_position',
     'dexjoco_rotation_math', 'dexjoco_preview_describe', 'dexjoco_preview_run',
+    # Target-level motion (agent as policy): the server interpolates, tracks and settles.
+    'dexjoco_move_ee', 'dexjoco_hand',
 })
 
 
@@ -63,6 +65,12 @@ class Benchmark:
     cli_defaults: dict = field(default_factory=dict)
     # Setup fields that do not apply: name -> (fixed value, reason).
     fixed: dict = field(default_factory=dict)
+    # Action interfaces (services/mcp_contract.py action_interface): the tools only the 'rows'
+    # interface exposes (per-step action rows and their previews) and the target-level tools only
+    # 'targets' exposes (agent as policy, after Agent-as-Policy's move_ee: goal poses the server
+    # turns into rows). Empty target_tools: the benchmark has no target interface.
+    row_tools: frozenset = frozenset()
+    target_tools: frozenset = frozenset()
 
     def _hooks(self):
         return importlib.import_module(self.adapter)
@@ -120,12 +128,14 @@ BENCHMARKS = {
         name='dexjoco', label='DexJoCo', adapter='services.dexjoco.benchmark',
         robot_tools=DEXJOCO_TOOLS, geometry_tools=frozenset({'dexjoco_pixel_to_position'}),
         unscoped_tools=frozenset({'dexjoco_rotation_math'}),
-        mutating=frozenset({'dexjoco_step', 'dexjoco_hold'}),
+        mutating=frozenset({'dexjoco_step', 'dexjoco_hold', 'dexjoco_move_ee', 'dexjoco_hand'}),
         previewable=frozenset(), status_tool='dexjoco_status', observe_tool='dexjoco_observe',
         tool_prefixes=('dexjoco_',),
         # The DexJoCo preview reports the live step as `live_step_id`, so it is never an episode step.
         episode_tool_prefixes=('dexjoco_',),
         simulator_modules=('services.dexjoco.server', 'services.dexjoco.preview_server'), startup_seconds=300,
+        row_tools=frozenset({'dexjoco_step', 'dexjoco_preview_describe', 'dexjoco_preview_run'}),
+        target_tools=frozenset({'dexjoco_move_ee', 'dexjoco_hand'}),
         # The official DexJoCo control: no motion planner ('plan' empty); the overview camera is
         # per task (services/dexjoco/benchmark.py task_robot).
         robot={'benchmark': 'DexJoCo', 'status': 'dexjoco_status', 'observe': 'dexjoco_observe',
@@ -151,7 +161,6 @@ BENCHMARKS = {
         cli_defaults={'exploration_start_seed': 0, 'formal_episodes': 150, 'formal_workers': 4},
         fixed={
             'formal_eval_seed': (1, 'Formal always uses the official DexJoCo evaluation layouts.'),
-            'expert_content': ('full', 'DexJoCo expert episodes are complete recordings.'),
         },
     ),
 }

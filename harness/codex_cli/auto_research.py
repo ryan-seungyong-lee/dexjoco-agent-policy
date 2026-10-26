@@ -52,7 +52,7 @@ def populate_workspace(config, workspace, contract=None, *, formal_episode=False
     from services.mcp_contract import Contract
     from services.workspace import Setup, build, recipe_for
     if formal_episode:
-        options = frozenset({'formal-episode'})
+        options = frozenset({'formal-episode'} | ({'agent-policy'} if getattr(config, 'agent_policy', False) else set()))
     else:
         options = frozenset(name for name, enabled in (('handoff', config.write_handoff),
                                                        ('agent-formal', config.agent_formal)) if enabled)
@@ -564,6 +564,23 @@ ERROR_PROMPT = ("Your previous run ended on an error while exploration is still 
                 "workers it left running were stopped, and your open episodes kept running. Call status, reread "
                 "memory/PROGRESS.md, and continue from the live state.")
 MAX_RELAUNCHES = 3
+# Experiment runs (RAX_UNATTENDED=1) have no operator: AGENTS.md's "report the blocker" otherwise
+# ends a session that waits for an answer nobody gives, with no formal result at all.
+UNATTENDED_NOTE = {
+    False: (' No human operator is watching this unattended run: nobody will answer questions or approve '
+            'steps. Make every decision yourself and never end your turn to wait for a reply. If your tools '
+            'include submit, register, rehearse and submit before exploration closes the controller you '
+            'expect to succeed most often, even if manual success was never confirmed.'),
+    True: (' No human operator is watching this unattended run: nobody will answer questions or approve '
+           'steps. Make every decision yourself and never end your turn to wait for a reply; keep acting '
+           'until the episode or exploration ends.')}
+
+
+def unattended(prompt, agent_formal=False):
+    """The prompt, plus the no-operator note when the run is unattended (RAX_UNATTENDED=1)."""
+    if os.environ.get('RAX_UNATTENDED') == '1' and prompt:
+        return prompt + UNATTENDED_NOTE[bool(agent_formal)]
+    return prompt
 # A run that fails (a provider overload, a dropped stream) is resumed after a pause; a run
 # that keeps failing quickly is given up after this many tries in a row.
 MAX_ERROR_RELAUNCHES = 5
@@ -572,7 +589,7 @@ STEADY_SECONDS = 1800  # A run this long resets the count of failures in a row.
 
 
 def run_agent(start, *, deployed, prompt, interactive, open_exploration, latest, lifecycle, save,
-              last_error=lambda: None, sleep=time.sleep):
+              last_error=lambda: None, sleep=time.sleep, agent_formal=False):
     """Run the agent; while exploration is open, resume the same conversation when a
     non-interactive run ends its turn (a bounded number of times) or fails (after a pause)."""
     failures = 0
@@ -589,13 +606,13 @@ def run_agent(start, *, deployed, prompt, interactive, open_exploration, latest,
             save()
             if failures > MAX_ERROR_RELAUNCHES:
                 return returncode
-            next_prompt = ERROR_PROMPT.format(error=error)
+            next_prompt = unattended(ERROR_PROMPT.format(error=error), agent_formal)
         else:
             failures = 0  # Failures count only in a row.
             relaunches = lifecycle.get('relaunches', 0)
             if relaunches >= MAX_RELAUNCHES:
                 return returncode
-            next_prompt = CONTINUE_PROMPT
+            next_prompt = unattended(CONTINUE_PROMPT, agent_formal)
         try:
             deployed['resume_session'] = latest()
         except (RuntimeError, OSError, TypeError):
@@ -743,6 +760,8 @@ def main():
             if args.resume or not (config.agent_formal and config.adaptation_source):
                 raise SystemExit('--formal-only needs a fresh configuration with agent formal and an adaptation source')
             closed = True
+        if getattr(config, 'agent_policy', False):
+            closed = True  # Agent as policy: no exploring agent; only the formal copies run.
         if args.agent_formal and not (args.resume and closed):
             raise SystemExit('--agent-formal needs --resume of a session whose exploration has closed')
         if args.resume:
@@ -795,6 +814,7 @@ def main():
                 lifecycle['status'] = 'prepared-only'
                 return
             prompt = args.exec_prompt or RESUME_PROMPT if args.resume else startup_prompt(deployed['workspace'], args.exec_prompt)
+            prompt = unattended(prompt, config.agent_formal)
             if (not args.resume and config.adaptation_source and config.adaptation_context == 'compact'
                     and deployed.get('resume_session')):
                 # Compact the carried conversation once, before its first turn here.
@@ -804,6 +824,8 @@ def main():
             if args.formal_only:
                 # No exploring agent: the imported one is frozen as it arrived.
                 persist(config.root/'exploration-complete.json', {'finished_at': time.time(), 'formal_only': True})
+            if getattr(config, 'agent_policy', False) and not (config.root/'exploration-complete.json').is_file():
+                persist(config.root/'exploration-complete.json', {'finished_at': time.time(), 'agent_policy': True})
             if closed:
                 returncode = 0  # Exploration already ended; only the frozen formal remains.
             else:
@@ -840,7 +862,8 @@ def main():
                         latest=lambda: cli.latest_session(home),
                         last_error=lambda: (cli.last_error(home) if config.agent_cli != 'codex'
                                             else deployed.get('agent_error')),
-                        lifecycle=lifecycle, save=lambda: persist(record, lifecycle))
+                        lifecycle=lifecycle, save=lambda: persist(record, lifecycle),
+                        agent_formal=config.agent_formal)
                 if config.agent_cli not in ('codex', 'claude'):
                     returncode = external_cli.launch(config, deployed, gemini_key_file=args.key_file, prompt=prompt,
                                            interactive=interactive, agent_runs=agent_runs).returncode

@@ -27,7 +27,10 @@ def freeze_exploration(config, supervisor, deployed):
         return existing['bundle']
     cli = harness(config.agent_cli)
     home, workspace = deployed[cli.HOME_KEY], deployed['workspace']
-    session_id = cli.latest_session(home)
+    try:
+        session_id = cli.latest_session(home)
+    except RuntimeError:
+        session_id = None  # Agent as policy: no agent ever ran here.
     ident = uuid.uuid4().hex
     parent = config.root/'bundles'
     parent.mkdir(mode=0o700, exist_ok=True)

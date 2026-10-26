@@ -27,9 +27,14 @@ COMMON_OMISSIONS = (
     # Visual demonstrations are optional context; without them the skill has nothing to read.
     SkillRule('in-context-action-learning', lambda s: not s.demonstrations),
     # Complete expert episodes are optional context too.
-    SkillRule('learn-from-experts', lambda s: not s.expert_demonstrations),
+    SkillRule('learn-from-experts', lambda s: not s.expert_demonstrations or s.expert_content.startswith('human-')),
+    # Human demonstrations replace the robot experts.
+    SkillRule('learn-from-human-demos', lambda s: not s.expert_demonstrations
+              or not s.expert_content.startswith('human-')),
     # Moving a wrist camera closer needs a robot with wrist cameras.
     SkillRule('wrist-camera-inspection', lambda s: not wrist_cameras(s.contract.benchmark)),
+    # Target-level motion has no row preview.
+    SkillRule('motion-preview', lambda s: s.contract.action_interface == 'targets'),
 )
 # Method skills an agent formal copy has no use for: it plays one episode live, with no
 # later episodes to compare, no bundle to rehearse and no changelog to keep.
@@ -53,8 +58,11 @@ AUTO_RESEARCH = Recipe('auto-research/exploration', PROJECT / 'auto_research_age
 # An agent formal copy: one live held-out episode, its own instructions, no bundle to
 # register, rehearse or submit, and formal-copy variants of the memory and
 # autonomous-control (supervised automation) skills.
+# Agent as policy carries nothing: no code to run under supervision, no tips to reuse.
+AGENT_POLICY_OMISSIONS = tuple(SkillRule(name, lambda s: 'agent-policy' in s.options)
+                               for name in ('autonomous-control', 'experience-memory'))
 FORMAL_COPY = replace(AUTO_RESEARCH, name='auto-research/formal-copy', agents_source='FORMAL_AGENTS.md',
-                      omit_skills=AUTO_RESEARCH.omit_skills + FORMAL_METHOD_OMISSIONS,
+                      omit_skills=AUTO_RESEARCH.omit_skills + FORMAL_METHOD_OMISSIONS + AGENT_POLICY_OMISSIONS,
                       drop_documents=('START_PROMPT.md',), role_documents=(),
                       variant='formal-episode', remove_files=FORMAL_REMOVED, options=frozenset({'formal-episode'}))
 

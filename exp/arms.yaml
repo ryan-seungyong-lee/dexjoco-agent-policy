@@ -1,0 +1,94 @@
+# Experiment arms. Every arm runs Claude (Sonnet 5.5 by default; earlier phases pinned Haiku 5.5) through Claude Code (RAX dexjoco/native) with no
+# external perception and no episode reviews, unattended (RAX_UNATTENDED=1). Two separate modes:
+#   agp  agent as policy: no exploration at all. Each formal episode is played by a fresh agent that
+#        carries no notes, code or conversation; it sees only the task, its observations, the robot
+#        tools and (expert arms) the mounted expert episodes. `episodes` is unused.
+#   cap  code as policy (RAX's default): 5 exploration episodes, then the submitted program alone
+#        on all 150 official evaluation episodes.
+defaults: {episodes: 5, model: claude-sonnet-5-5, effort: xhigh, mode: cap, formal_episodes: 150}
+tasks: [water_plant, fold_glasses, bimanual_microwave_cook]
+reps: [0]
+phases:
+  smoke:
+    model: claude-haiku-5-5
+    tasks: [water_plant]
+    episodes: 3
+    arms: [{profile: rgbd, expert: none}]
+  pilot:   # find a task Haiku can sometimes solve by direct control: rgbd, no demos, 3 formal episodes
+    model: claude-haiku-5-5
+    mode: agp
+    episodes: 1
+    formal_episodes: 3
+    tasks: [click_mouse, pinch_tongs, pick_bucket, hammer_nail]
+    arms: [{profile: rgbd, expert: none}]
+  pilot2:   # which task gets solvable with more hints? rgb-only (hardest) and rgbd + robot demos (strongest hint)
+    model: claude-haiku-5-5
+    mode: agp
+    episodes: 1
+    formal_episodes: 3
+    tasks: [click_mouse, hammer_nail, pick_bucket]
+    arms:
+      - {profile: rgb-only, expert: none}
+      - {profile: rgbd, expert: full}
+  agp_pilot:   # pure agent as policy with RAX's row-level dexjoco_step (ran before the target-level tools)
+    model: claude-haiku-5-5
+    mode: agp
+    episodes: 1
+    formal_episodes: 3
+    tasks: [click_mouse, hammer_nail, pick_bucket]
+    arms:
+      - {profile: rgb-only, expert: none}
+      - {profile: rgbd, expert: none}
+      - {profile: rgbd, expert: full}
+  agp_targets_pilot:   # the same arms as agp_pilot, after the target-level motion tools (dexjoco_move_ee/hand)
+    model: claude-haiku-5-5
+    mode: agp
+    episodes: 1
+    formal_episodes: 3
+    tasks: [click_mouse, hammer_nail, pick_bucket]
+    arms:
+      - {profile: rgb-only, expert: none}
+      - {profile: rgbd, expert: none}
+      - {profile: rgbd, expert: full}
+  model_opus:   # is it the model? the best pilot arm (target-level AgP, rgbd, no demos) with Opus 5.5
+    mode: agp
+    episodes: 1
+    formal_episodes: 3
+    model: claude-opus-5-5
+    tasks: [click_mouse]
+    arms: [{profile: rgbd, expert: none}]
+  model_sonnet:   # ... and with Sonnet 5.5
+    mode: agp
+    episodes: 1
+    formal_episodes: 3
+    model: claude-sonnet-5-5
+    tasks: [click_mouse]
+    arms: [{profile: rgbd, expert: none}]
+  agp:   # priority: does a human demonstration help an agent that controls the robot itself?
+    model: claude-haiku-5-5
+    mode: agp
+    episodes: 1
+    formal_episodes: 10
+    arms:
+      - {profile: rgb-only, expert: none}
+      - {profile: rgb-depth, expert: none}
+      - {profile: rgb-camera, expert: none}
+      - {profile: rgbd, expert: none}
+      - {profile: rgbd, expert: human-video}
+      - {profile: rgbd, expert: human-full}
+      - {profile: rgbd, expert: full}        # robot demonstrations, for reference
+  cap:   # does a human demonstration speed up / improve the program the agent writes?
+    mode: cap
+    arms:
+      - {profile: rgbd, expert: none}
+      - {profile: rgbd, expert: human-full}
+      - {profile: rgbd, expert: full}
+  sonnet_screen:   # stage 1 of the task search with Sonnet 5.5: which single-arm tasks are hard with rgbd alone
+                   # but get easier with robot demos (summarized as keyposes.json)? 3 evaluation episodes each.
+    mode: agp
+    episodes: 1
+    formal_episodes: 3
+    tasks: [click_mouse, hammer_nail, pick_bucket, pinch_tongs, fold_glasses, water_plant]
+    arms:
+      - {profile: rgbd, expert: none}
+      - {profile: rgbd, expert: full}

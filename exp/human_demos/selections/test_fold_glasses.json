@@ -1,0 +1,4 @@
+{"task": "fold_glasses", "clips": [
+ {"h5": "EGODEX/part4/put_in_take_out_glasses/0.hdf5", "hands": "right"},
+ {"h5": "EGODEX/part4/put_in_take_out_glasses/1.hdf5", "hands": "right"},
+ {"h5": "EGODEX/part4/put_in_take_out_glasses/10.hdf5", "hands": "right"}]}

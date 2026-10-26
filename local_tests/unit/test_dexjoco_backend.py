@@ -24,11 +24,14 @@ needs_source = pytest.mark.skipif(not (TK.source_root() / "configs").is_dir(),
 
 
 # ------------------------------------------------------------------ contract
+ROW_TOOLS = DEXJOCO_TOOLS - BENCHMARKS['dexjoco'].target_tools  # The default 'rows' interface.
+
+
 def test_contract_selects_dexjoco_tools():
     contract = Contract(benchmark='dexjoco')
-    assert contract.robot_names == DEXJOCO_TOOLS
+    assert contract.robot_names == ROW_TOOLS
     assert Contract(observation_profile='rgb-only', benchmark='dexjoco').robot_names == \
-        DEXJOCO_TOOLS - {'dexjoco_pixel_to_position'}
+        ROW_TOOLS - {'dexjoco_pixel_to_position'}
     with pytest.raises(PermissionError):
         contract.require_robot('not_a_tool', {})
     assert contract.scoped_tools >= {'dexjoco_step', 'dexjoco_hold', 'start_episode'}
@@ -300,7 +303,7 @@ def test_gateway_lists_and_routes_dexjoco_tools(tmp_path):
                       refund=lambda *_: None, budget=lambda: {})
     token = gateway.acquire()
     names = {t['name'] for t in gateway.handle(token, {'jsonrpc': '2.0', 'id': 1, 'method': 'tools/list'})['result']['tools']}
-    assert DEXJOCO_TOOLS <= names
+    assert ROW_TOOLS <= names
     backend.start(formal=False, seed=0)
     reply = gateway.handle(token, {'jsonrpc': '2.0', 'id': 2, 'method': 'tools/call',
                                    'params': {'name': 'dexjoco_step', 'arguments': {'actions': [[0.0] * 22] * 2}}})

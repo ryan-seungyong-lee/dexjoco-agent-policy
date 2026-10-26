@@ -37,13 +37,21 @@ RECORDING = (' This episode has no recording cap: its camera frames and tool rep
              'workspace and never end it. Its only limits are its step limit and any wall limit `status` reports.')
 
 
+# Agent as policy: nothing was carried and no agent explored before this one.
+POLICY_PROMPT = ('An episode of this task is already running. Read AGENTS.md and TASK.md, then observe the scene '
+                 'and control the robot yourself through the robot tools to complete the task in this episode.')
+
+
 def episode_prompt(config, transferred):
     """A copy's first message; a code-mode explorer's copy also learns it may now join its code, and
     that the recording limit of its code-mode runs does not apply."""
+    from harness.codex_cli.auto_research import unattended
+    if getattr(config, 'agent_policy', False):
+        return unattended(POLICY_PROMPT, True)
     prompt = FORMAL_PROMPT.format(transferred=', '.join(transferred) or 'nothing')
     if config.agent_formal:
-        return prompt
-    return prompt + UNATTENDED + RECORDING
+        return unattended(prompt, True)
+    return unattended(prompt + UNATTENDED + RECORDING, True)
 # A copy whose run fails while its episode is live (a provider overload, a dropped stream) resumes its
 # conversation after a pause, as an exploring agent does; one that keeps failing quickly is given up after
 # this many tries in a row.
