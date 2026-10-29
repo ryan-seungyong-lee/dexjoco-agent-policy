@@ -31,6 +31,8 @@ from scipy.spatial.transform import Rotation
 
 SCHEMA = 'dexjoco_human_demos_v1'
 import os
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'demos'))
+from keyposes import summarize  # noqa: E402
 # EGODEX_ROOT: the EgoDex train set (partN/<task>/<i>.{mp4,hdf5}); RLHND_ROOT: ':'-separated roots of the
 # per-clip hand reconstructions (contact probability, force) that match it.
 RLHND_ROOTS = tuple(Path(p) for p in os.environ.get('RLHND_ROOT', '').split(':') if p)
@@ -314,6 +316,25 @@ def build_clip(clip, task, out_dir, verify_dir, geort, mirror):
                         **({'contact': contact.astype(np.float32)} if contact is not None else {}),
                         **({'force': force.astype(np.float32)} if force is not None else {}))
     np.savez_compressed(demo / 'allegro_retarget.npz', q=retarget.astype(np.float32), valid=retarget_valid)
+    # The same key-moment summary as the robot demos (exp/demos/keyposes.py), per acting hand, from the
+    # frames where that hand is tracked: no object poses; contact from RLHND when the clip has it.
+    acting = SIDES if clip.get('hands', 'right') == 'both' else (clip.get('hands', 'right'),)
+    arms = {}
+    for side in acting:
+        slot = SIDES.index(side)
+        keep = present[:, slot]
+        if keep.sum() < 2:
+            continue
+        arms[side] = summarize(hz=TRAJ_HZ, position=wrist_pos[keep, slot], rotvec=wrist_rotvec[keep, slot],
+                               hand=retarget[keep, slot],
+                               contact=(contact[keep, slot] > 0.5) if contact is not None else None,
+                               source='human video (EgoDex hand tracking, Allegro retarget)')
+    (demo / 'keyposes.json').write_text(json.dumps({
+        'task': task, 'episode': name, 'arms': arms,
+        'frames': "wrist_* is the person's wrist in metres in the clip's gravity_head0 frame (x right, y forward "
+                  "from the head at the first frame, z up), not the robot world: use offsets and directions, not "
+                  "absolute positions; steps are at the trajectory rate (hz); hand_joints_rad is the GeoRT retarget "
+                  "in the robot hand joint order"}, indent=1) + '\n')
     (demo / 'phases.json').write_text(json.dumps(
         {'hands': segments, 'source': 'contact (RLHND)' if contact is not None else 'wrist speed only',
          'threshold': 0.5}, indent=2))

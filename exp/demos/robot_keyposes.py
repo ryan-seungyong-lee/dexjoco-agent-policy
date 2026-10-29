@@ -103,7 +103,15 @@ def main():
             expert = task_root / "experts" / name
             data = np.load(expert / "trajectory.npz")
             state = np.asarray(data["state"], dtype=float).reshape(len(data["state"]), -1)
-            objects = object_traces(task, expert)
+            # The replayed object poses are kept outside the agent-visible expert directory, so the
+            # summary can be retuned without the simulator.
+            cache = task_root / "object_traces" / f"{name}.npz"
+            if cache.is_file():
+                objects = dict(np.load(cache))
+            else:
+                objects = object_traces(task, expert)
+                cache.parent.mkdir(exist_ok=True)
+                np.savez_compressed(cache, **objects)
             arms = {}
             for arm, position, quat, hand in arm_tracks(state, dual):
                 rotvec = np.stack([matrix_to_rotvec(quat_wxyz_to_matrix(q)) for q in quat])

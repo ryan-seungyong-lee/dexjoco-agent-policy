@@ -69,7 +69,7 @@ HUMAN_SCHEMA = "dexjoco_human_demos_v1"
 # What each video-only view keeps of an expert episode directory.
 ROBOT_VIDEO_PARTS = ("videos", "frames", "episode.json")
 HUMAN_VIDEO_PARTS = ("video.mp4", "frames", "episode.json")
-HUMAN_MOTION_FILES = ("hand_trajectory.npz", "phases.json")
+HUMAN_MOTION_FILES = ("hand_trajectory.npz", "phases.json", "keyposes.json")
 
 
 def human_demos_root():

@@ -21,15 +21,15 @@ poses, hand postures and timing from what the videos show (the control rate is
 
 {% else %}
 - `keyposes.json`: **start here.** The recording summarized into its key moments
-  (`start`, `approach`, `pre_contact`, `contact`, then `grasp`, `lift`, `release` when they
-  happen, and `end`), per arm. Each moment gives the step and time, the flange pose
+  (`start`, `approach`, `pre_contact`, `contact`, then `preshape`, `grasp`, `lift`, `release`
+  when they happen, and `end`), per arm. Each moment gives the step and time, the flange pose
   (`wrist_position_m`, `wrist_rotvec_rad`: the {% if action_targets %}`dexjoco_move_ee`{% else %}action-row{% endif %} frame), the hand joints
-  (`hand_joints_rad`, the {% if action_targets %}`dexjoco_hand`{% else %}action-row{% endif %} order) with a 0..1 `hand_closure`, the offset
+  (`hand_joints_rad`, the {% if action_targets %}`dexjoco_hand`{% else %}action-row{% endif %} order) with their mean flexion, the offset
   from the contact pose (`wrist_from_contact_m`), and for each task object its pose in that
   recording and the flange position relative to it (`wrist_minus_object_world_m`, and
   `wrist_minus_object_in_object_yaw_frame_m` in the object's own heading). The top level
   gives the approach direction and distance, the speed near contact, and `contact_cue`
-  (what marked contact: the hand closing, an object starting to move).
+  (what marked contact, usually an object starting to move with the hand near it).
 - `trajectory.npz`: `action_rotvec` (rows in exactly the {% if action_targets %}official action layout: flange position and rotation vector, then hand joint targets, as `dexjoco_status` `action_layout` lists{% else %}`dexjoco_step` layout{% endif %}),
   `state` (the official state vector; values after its first
 {% if robot.arms == 'dual' %}46{% else %}23{% endif %} entries describe the

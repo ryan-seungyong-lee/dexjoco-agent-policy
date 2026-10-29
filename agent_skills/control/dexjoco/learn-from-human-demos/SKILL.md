@@ -19,6 +19,12 @@ Each recording directory has:
 - `episode.json`: the source dataset, the person's instruction for the clip, which
   hands act, the time span that matches this task, and the coordinate conventions.
 {% if expert_human_motion %}
+- `keyposes.json`: **start here.** The recording summarized into its key moments per
+  acting hand (start, pre-shape, approach, pre-contact, contact, grasp, release, end):
+  the wrist pose and its offset from the pose at contact, and the hand posture
+  (Allegro retarget, in the step hand order) with its mean flexion. Wrist positions are in
+  the clip's frame, not your world: use the offsets and directions, not the positions.
+  It has no object poses.
 - `hand_trajectory.npz` (10 Hz, hand slot 0 = left, 1 = right):
   - `t` (N,): seconds from the clip start.
   - `present` (N, 2): the hand is tracked.

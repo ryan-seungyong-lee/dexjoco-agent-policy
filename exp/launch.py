@@ -32,8 +32,10 @@ def arms(phase_name):
     keys = ('episodes', 'model', 'effort', 'mode', 'formal_episodes', 'agent', 'codex_profile')
     defaults = {'agent': 'claude', **spec['defaults'], **{k: phase[k] for k in keys if k in phase}}
     for task in phase.get('tasks', spec['tasks']):
-        for rep in phase.get('reps', spec['reps']):
-            for arm in phase['arms']:
+        for arm in phase['arms']:
+            if task not in arm.get('tasks', [task]):  # an arm may run on a subset of the tasks
+                continue
+            for rep in arm.get('reps', phase.get('reps', spec['reps'])):
                 settings = {**defaults, **{k: arm[k] for k in keys if k in arm}}  # an arm may override them
                 arm_id = f"{phase_name}_{task}_{arm['profile']}_{arm['expert']}_r{rep}"
                 yield {'ARM_ID': arm_id, 'TASK': task, 'PROFILE': arm['profile'], 'EXPERT': arm['expert'],

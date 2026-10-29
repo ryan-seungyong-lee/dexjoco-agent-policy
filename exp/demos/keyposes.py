@@ -1,11 +1,11 @@
 """Key moments of one demonstration, in the form an agent can turn into motion targets (numpy only).
 
 A demonstration (robot teleoperation or a tracked human video) becomes a short list of moments:
-start, approach, pre-contact, contact, (grasp), (lift), (release), end. Each moment gives
+start, (preshape), approach, pre-contact, contact, (grasp), (lift), (release), end. Each moment gives
 
 - the wrist/flange pose, and its offset from the pose at contact (both sources have it);
-- the hand posture (robot: the Allegro joints it held; human: the Allegro retarget) and a 0..1
-  closure from open (the demo's start) to its most closed;
+- the hand posture (robot: the Allegro joints it held; human: the Allegro retarget) and its mean
+  joint flexion (0 = flat);
 - per tracked object (robot demos only; human videos have no object poses): the flange position
   relative to the object, in world axes and in the object's own heading (yaw) frame, and how far
   the object has moved so far.
@@ -21,7 +21,12 @@ APPROACH_M = 0.10       # approach: last time the wrist was this far from where 
 PRE_CONTACT_M = 0.03    # pre-contact: ... this far
 MOVED_M = 0.01          # an object counts as moved once it is this far from its start
 LIFT_M = 0.02           # a lift moment is reported when an object rises at least this much
-CLOSED = 0.5            # grasp/release threshold on the 0..1 closure
+NEAR_M = 0.25           # an object's motion counts as contact only with the wrist this close to it
+SETTLE_STEPS = 10       # objects settle after reset for a few steps
+PRESHAPE_RAD = 0.15     # mean joint flexion gained before contact that counts as a pre-shape
+GRASP_SECONDS = 3.0     # time after contact searched for the grasp
+GRASP_RAD = 0.03        # extra mean flexion after contact that counts as closing on the object
+RELEASE_RAD = 0.10      # opening below the contact posture by this much counts as a release
 
 
 def quat_wxyz_to_matrix(q):
@@ -49,13 +54,6 @@ def _r(values, digits=3):
     return np.round(np.asarray(values, dtype=float), digits).tolist()
 
 
-def closure(hand):
-    """0 at the demo's first posture, 1 at its most flexed (mean joint flexion)."""
-    flex = np.asarray(hand, dtype=float).mean(axis=1)
-    span = flex.max() - flex[0]
-    return (flex - flex[0]) / span if span > 1e-6 else np.zeros_like(flex), float(span)
-
-
 def _last_before(distance, end, threshold):
     """Last index before ``end`` where ``distance`` was at least ``threshold`` (0 if never)."""
     far = np.nonzero(distance[:end] >= threshold)[0]
@@ -68,23 +66,30 @@ def summarize(*, hz, position, rotvec, hand, objects=None, contact=None, source)
     contact: (N,) bool when the source measures contact directly (human: contact probability)."""
     position, rotvec, hand = (np.asarray(a, dtype=float) for a in (position, rotvec, hand))
     n = len(position)
-    close, span = closure(hand)
+    flex = hand.mean(axis=1)
     objects = {label: np.asarray(pose, dtype=float) for label, pose in (objects or {}).items()}
-    moved = {label: np.linalg.norm(pose[:, :3] - pose[0, :3], axis=1) for label, pose in objects.items()}
+    # Objects settle for a few steps after reset: measure their motion from the settled pose.
+    settled = min(SETTLE_STEPS, n - 1)
+    moved = {label: np.linalg.norm(pose[:, :3] - pose[settled, :3], axis=1) for label, pose in objects.items()}
+    near = {label: np.linalg.norm(position - pose[:, :3], axis=1) <= NEAR_M for label, pose in objects.items()}
 
-    # Contact: the first of the hand closing past half way (when it closes at all), an object
-    # starting to move, and a measured contact.
+    # Contact: the first of an object starting to move while the wrist is near it, and a measured
+    # contact; without either, the wrist's closest approach to an object (or its lowest point).
     candidates = {}
-    if span > 0.15:
-        candidates["hand closes"] = int(np.argmax(close >= CLOSED))
     for label, d in moved.items():
-        if (d >= MOVED_M).any():
-            candidates[f"{label} starts moving"] = int(np.argmax(d >= MOVED_M))
+        touched = (d >= MOVED_M) & near[label]
+        touched[:settled] = False
+        if touched.any():
+            candidates[f"{label} starts moving"] = int(np.argmax(touched))
     if contact is not None and np.asarray(contact).any():
         candidates["contact measured"] = int(np.argmax(np.asarray(contact)))
     if candidates:
         cue = min(candidates, key=candidates.get)
         k_contact = candidates[cue]
+    elif objects:
+        label, distance = min(((label, np.linalg.norm(position - pose[:, :3], axis=1))
+                               for label, pose in objects.items()), key=lambda item: item[1].min())
+        cue, k_contact = f"closest to {label}", int(np.argmin(distance))
     else:
         cue, k_contact = "lowest wrist point", int(np.argmin(position[:, 2]))
     to_contact = np.linalg.norm(position - position[k_contact], axis=1)
@@ -93,18 +98,22 @@ def summarize(*, hz, position, rotvec, hand, objects=None, contact=None, source)
              "approach": _last_before(to_contact, k_contact, APPROACH_M),
              "pre_contact": _last_before(to_contact, k_contact, PRE_CONTACT_M),
              "contact": k_contact}
-    if span > 0.15 and (close[k_contact:] >= CLOSED).any():
-        k_grasp = k_contact + int(np.argmax(close[k_contact:] >= CLOSED))
-        if k_grasp > k_contact:
-            steps["grasp"] = k_grasp
-        opened = np.nonzero(close[k_grasp:] < CLOSED)[0]
-        if len(opened):
-            steps["release"] = k_grasp + int(opened[0])
-    rises = {label: pose[:, 2] - pose[0, 2] for label, pose in objects.items()}
-    lifted = [label for label, rise in rises.items() if rise.max() >= LIFT_M]
+    # The hand usually pre-shapes on the way (flat -> half curled), then closes a little more on
+    # the object: preshape = half way to the contact posture, grasp = the most curled soon after.
+    if flex[k_contact] - flex[0] >= PRESHAPE_RAD:
+        steps["preshape"] = int(np.argmax(flex >= flex[0] + 0.5 * (flex[k_contact] - flex[0])))
+    window = flex[k_contact:k_contact + max(1, round(GRASP_SECONDS * hz))]
+    k_grasp = k_contact + int(np.argmax(window))
+    if window.max() - flex[k_contact] >= GRASP_RAD:
+        steps["grasp"] = k_grasp
+    opened = np.nonzero(flex[k_grasp:] <= flex[k_contact] - RELEASE_RAD)[0]
+    if len(opened):
+        steps["release"] = k_grasp + int(opened[0])
+    rises = {label: pose[:, 2] - pose[settled, 2] for label, pose in objects.items()}
+    lifted = [label for label, rise in rises.items() if rise[k_contact:].max() >= LIFT_M]
     if lifted:
-        label = max(lifted, key=lambda name: rises[name].max())
-        steps["lift"] = int(np.argmax(rises[label]))
+        label = max(lifted, key=lambda name: rises[name][k_contact:].max())
+        steps["lift"] = k_contact + int(np.argmax(rises[label][k_contact:]))
     steps["end"] = n - 1
     order = sorted(steps.items(), key=lambda item: (item[1], list(steps).index(item[0])))
 
@@ -118,7 +127,7 @@ def summarize(*, hz, position, rotvec, hand, objects=None, contact=None, source)
             "wrist_from_contact_m": _r(position[k] - position[k_contact]),
             "wrist_from_contact_in_contact_frame_m": _r(contact_rot.T @ (position[k] - position[k_contact])),
             "wrist_yaw_deg": round(np.degrees(yaw_of(rot)), 1),
-            "hand_joints_rad": _r(hand[k]), "hand_closure": round(float(close[k]), 2),
+            "hand_joints_rad": _r(hand[k]), "hand_flexion_mean_rad": round(float(flex[k]), 3),
         }
         if objects:
             rel = {}
@@ -150,6 +159,5 @@ def summarize(*, hz, position, rotvec, hand, objects=None, contact=None, source)
         "approach_distance_m": round(float(norm), 3),
         "speed_near_contact_m_per_s": round(float(speed[window].mean()), 3) if len(speed[window]) else None,
         "peak_speed_m_per_s": round(float(speed.max()), 3) if len(speed) else None,
-        "hand_closure_span_rad": round(span, 3),
         "moments": moments,
     }

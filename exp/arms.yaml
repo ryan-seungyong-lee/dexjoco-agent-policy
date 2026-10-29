@@ -92,3 +92,26 @@ phases:
     arms:
       - {profile: rgbd, expert: none}
       - {profile: rgbd, expert: full}
+      # Reruns of arms whose sessions hit the subscription limit at r0 (one arm at a time: --slots 1).
+      - {profile: rgbd, expert: none, reps: [1], tasks: [pinch_tongs]}
+      - {profile: rgbd, expert: full, reps: [1], tasks: [hammer_nail, pick_bucket, fold_glasses, water_plant]}
+  sonnet_screen2:  # stage 1 on the dual-arm tasks, demo arm first: only tasks it solves get the rgbd-alone arm.
+    mode: agp
+    episodes: 1
+    formal_episodes: 3
+    tasks: [bimanual_photograph, bimanual_unlock_ipad]   # short episodes only (expert demos <= ~16 s)
+    arms:
+      - {profile: rgbd, expert: full}
+      - {profile: rgbd, expert: none, tasks: [bimanual_unlock_ipad, bimanual_photograph]}   # the demo arm solved them
+  sonnet_stage2:   # stage 2 on the five chosen tasks: the same comparison with rgb only.
+    mode: agp
+    episodes: 1
+    formal_episodes: 3
+    tasks: [click_mouse, pinch_tongs, water_plant, bimanual_photograph, bimanual_unlock_ipad]
+    arms:
+      - {profile: rgb-only, expert: full}
+      - {profile: rgb-only, expert: none}
+      # Reruns of arms whose sessions hit the subscription limit at r0 (one arm at a time: --slots 1).
+      - {profile: rgb-only, expert: none, reps: [1], tasks: [pinch_tongs]}
+      - {profile: rgb-only, expert: full, reps: [1], tasks: [water_plant, bimanual_photograph, bimanual_unlock_ipad]}
+      - {profile: rgb-only, expert: none, reps: [1], tasks: [water_plant, bimanual_photograph, bimanual_unlock_ipad]}
