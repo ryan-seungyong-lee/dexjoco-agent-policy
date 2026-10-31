@@ -99,7 +99,7 @@ phases:
     mode: agp
     episodes: 1
     formal_episodes: 3
-    tasks: [bimanual_photograph, bimanual_unlock_ipad]   # short episodes only (expert demos <= ~16 s)
+    tasks: [bimanual_photograph, bimanual_unlock_ipad, bimanual_assembly]   # short episodes (expert demos <= ~19 s)
     arms:
       - {profile: rgbd, expert: full}
       - {profile: rgbd, expert: none, tasks: [bimanual_unlock_ipad, bimanual_photograph]}   # the demo arm solved them
@@ -115,3 +115,6 @@ phases:
       - {profile: rgb-only, expert: none, reps: [1], tasks: [pinch_tongs]}
       - {profile: rgb-only, expert: full, reps: [1], tasks: [water_plant, bimanual_photograph, bimanual_unlock_ipad]}
       - {profile: rgb-only, expert: none, reps: [1], tasks: [water_plant, bimanual_photograph, bimanual_unlock_ipad]}
+      # photograph r1 hit the weekly limit (unlock_ipad r1 never started): once more as r2.
+      - {profile: rgb-only, expert: full, reps: [2], tasks: [bimanual_photograph]}
+      - {profile: rgb-only, expert: none, reps: [2], tasks: [bimanual_photograph]}

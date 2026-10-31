@@ -27,6 +27,14 @@ TASKS = {
     'bimanual_microwave_cook': (['part4/stock_unstock_fridge', 'part3/open_close_insert_remove_box',
                                  'part1/boil_serve_egg'],
                                 r'microwave|oven|fridge|refrigerator|door|put .* (in|into)', 'both'),
+    # No EgoDex clip clicks a mouse, squeezes tongs, takes a photo or unlocks a tablet: these are the
+    # closest motions (grasp and move the mouse; pick up tongs / pinch with chopsticks; aim a remote and
+    # press its button; hold a phone and touch its screen / press keys).
+    'click_mouse': (['part2/basic_pick_place', 'part4/point_and_click_remote'], r'\bmouse\b|click', 'any'),
+    'pinch_tongs': (['part2/basic_pick_place', 'part5/use_chopsticks'], r'tongs|chopsticks', 'any'),
+    'bimanual_photograph': (['part4/point_and_click_remote'], r'point|click', 'both'),
+    'bimanual_unlock_ipad': (['part5/wipe_screen', 'part5/type_keyboard', 'part1/charge_uncharge_device'],
+                             r'phone|tablet|ipad|type|keyboard', 'both'),
 }
 HAND_CONF = ('leftHand', 'rightHand')
 
@@ -52,8 +60,8 @@ def score(info, pattern, hands):
     if not re.search(pattern, text):
         return None
     presence = info['hand_presence']
-    used = [presence.get('rightHand', 0)] if hands == 'right' else [presence.get('leftHand', 0),
-                                                                      presence.get('rightHand', 0)]
+    both = [presence.get('leftHand', 0), presence.get('rightHand', 0)]
+    used = {'right': both[1:], 'both': both, 'any': [max(both)]}[hands]  # 'any': either hand (mirrored later)
     duration = info['seconds']
     duration_fit = 1.0 if 3 <= duration <= 25 else 0.3
     return float(min(used)) * duration_fit
@@ -80,10 +88,13 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--out', type=Path, required=True)
     parser.add_argument('--per-task', type=int, default=30)
+    parser.add_argument('--task', action='append', help='only these tasks (default: all)')
     parser.add_argument('--max-scan', type=int, default=4000, help='clips scanned per EgoDex folder')
     args = parser.parse_args()
     args.out.mkdir(parents=True, exist_ok=True)
     for task, (folders, pattern, hands) in TASKS.items():
+        if args.task and task not in args.task:
+            continue
         ranked = []
         for folder in folders:
             if not (EGODEX / folder).is_dir():
